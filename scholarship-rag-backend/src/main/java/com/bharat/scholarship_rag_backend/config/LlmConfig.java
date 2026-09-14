@@ -3,27 +3,34 @@ package com.bharat.scholarship_rag_backend.config;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.googleai.GoogleAiEmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
-@EnableConfigurationProperties(LlmProperties.class)
 public class LlmConfig {
 
-    private final LlmProperties properties;
+    @Value("${groq.model.name}")
+    private String groqModelName;
 
-    public LlmConfig(LlmProperties properties) {
-        this.properties = properties;
-    }
+    @Value("${groq.base.url}")
+    private String groqBaseUrl;
+
+    @Value("${groq.api.key}")
+    private String groqApiKey;
+
+    @Value("${gemini.api.key}")
+    private String geminiApiKey;
+
+    @Value("${gemini.model.name}")
+    private String geminiModelName;
 
     @Bean
     public OpenAiChatModel chatModel() {
-        LlmProperties.Provider groq = properties.groq();
         return OpenAiChatModel.builder()
-                .modelName(groq.modelName())
-                .baseUrl(groq.baseUrl())
-                .apiKey(groq.apiKey())
+                .modelName(groqModelName)
+                .baseUrl(groqBaseUrl)
+                .apiKey(groqApiKey)
                 .maxTokens(1000)
                 .temperature(0.8)
                 .build();
@@ -31,10 +38,9 @@ public class LlmConfig {
 
     @Bean
     public EmbeddingModel embeddingModel() {
-        LlmProperties.Provider gemini = properties.gemini();
         return GoogleAiEmbeddingModel.builder()
-                .apiKey(gemini.apiKey())
-                .modelName(gemini.modelName())
+                .apiKey(geminiApiKey)
+                .modelName(geminiModelName)
                 .taskType(GoogleAiEmbeddingModel.TaskType.RETRIEVAL_DOCUMENT)
                 .outputDimensionality(768)
                 .build();
