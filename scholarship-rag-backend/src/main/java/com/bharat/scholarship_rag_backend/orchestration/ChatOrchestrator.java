@@ -1,11 +1,16 @@
 package com.bharat.scholarship_rag_backend.orchestration;
 
+import com.bharat.scholarship_rag_backend.dto.request.ChatMessage;
 import com.bharat.scholarship_rag_backend.dto.request.ChatRequest;
 import com.bharat.scholarship_rag_backend.dto.response.ChatResponse;
+import com.bharat.scholarship_rag_backend.enrichment.QueryGate;
+import com.bharat.scholarship_rag_backend.memory.MemoryManager;
+import com.bharat.scholarship_rag_backend.memory.conversation.ConversationMemory;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -14,9 +19,15 @@ import java.util.concurrent.atomic.AtomicReference;
 public class ChatOrchestrator {
 
     private final OpenAiStreamingChatModel openAiStreamingChatModel;
+    private final ConversationMemory conversationMemory;
+    private final MemoryManager memoryManager;
+    private final QueryGate queryGate;
 
-    public ChatOrchestrator(OpenAiStreamingChatModel openAiStreamingChatModel) {
+    public ChatOrchestrator(OpenAiStreamingChatModel openAiStreamingChatModel,ConversationMemory conversationMemory,MemoryManager memoryManager,QueryGate queryGate) {
         this.openAiStreamingChatModel = openAiStreamingChatModel;
+        this.conversationMemory = conversationMemory;
+        this.memoryManager = memoryManager;
+        this.queryGate = queryGate;
     }
 
     public ChatResponse processChat(ChatRequest chatRequest) {
@@ -24,12 +35,15 @@ public class ChatOrchestrator {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<Throwable> errorRef = new AtomicReference<>();
 
+        //Fetch Recent Conversation memories
+        List<ChatMessage> recentConversationMessages = conversationMemory
+                .allRecentConversation(chatRequest.getConversationId());
 
+        String cleanedQuery = queryGate.clean(chatRequest.getQuery());
 
+        boolean needsContext = queryGate.needsContext(cleanedQuery);
 
-
-
-        openAiStreamingChatModel.chat(chatRequest.getQuery(), new StreamingChatResponseHandler() {
+        openAiStreamingChatModel.chat(cleanedQuery, new StreamingChatResponseHandler() {
             @Override
             public void onPartialResponse(String partialResponse) {
                 answer.append(partialResponse);
