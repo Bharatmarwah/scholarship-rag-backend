@@ -3,6 +3,7 @@ package com.bharat.scholarship_rag_backend.config;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.googleai.GoogleAiEmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -43,6 +44,18 @@ public class LlmConfig {
                 .modelName(geminiModelName)
                 .taskType(GoogleAiEmbeddingModel.TaskType.RETRIEVAL_DOCUMENT)
                 .outputDimensionality(768)
+                .build();
+    }
+
+    @Bean
+    public OpenAiStreamingChatModel streamingChatModel(){
+        return OpenAiStreamingChatModel
+                .builder()
+                .modelName(groqModelName)
+                .baseUrl(groqBaseUrl)
+                .apiKey(groqApiKey)
+                .maxTokens(1000)
+                .temperature(0.8)
                 .build();
     }
 }
