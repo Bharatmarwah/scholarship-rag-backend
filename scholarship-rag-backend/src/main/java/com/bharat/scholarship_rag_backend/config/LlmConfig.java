@@ -33,7 +33,7 @@ public class LlmConfig {
                 .baseUrl(groqBaseUrl)
                 .apiKey(groqApiKey)
                 .maxTokens(1000)
-                .temperature(0.8)
+                .temperature(0.0)
                 .build();
     }
 
@@ -55,7 +55,7 @@ public class LlmConfig {
                 .baseUrl(groqBaseUrl)
                 .apiKey(groqApiKey)
                 .maxTokens(1000)
-                .temperature(0.8)
+                .temperature(0.0)
                 .build();
     }
 }
