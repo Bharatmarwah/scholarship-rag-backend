@@ -4,5 +4,7 @@ import lombok.Data;
 
 @Data
 public class ChatResponse {
-    private String conversationSummary;
+    private String response;
+    private String semanticMemorySummary;
+    private String conversationMemorySummary;
 }

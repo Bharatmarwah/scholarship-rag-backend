@@ -91,12 +91,6 @@
 			<artifactId>langchain4j-open-ai</artifactId>
 			<version>1.16.1</version>
 		</dependency>
-
-		<dependency>
-			<groupId>dev.langchain4j</groupId>
-			<artifactId>langchain4j-pgvector</artifactId>
-			<version>1.16.1-beta26</version>
-		</dependency>
 	</dependencies>
 
 	<build>

@@ -10,27 +10,27 @@ import java.util.List;
 public class ConversationMemory {
 
     private final RedisTemplate<String, Object> redisTemplate;
-    private final MemoryConstants memoryConstants;
+    private final ConversationMemoryConstants conversationMemoryConstants;
 
-    public ConversationMemory(RedisTemplate<String, Object> redisTemplate, MemoryConstants memoryConstants) {
+    public ConversationMemory(RedisTemplate<String, Object> redisTemplate, ConversationMemoryConstants conversationMemoryConstants) {
         this.redisTemplate = redisTemplate;
-        this.memoryConstants = memoryConstants;
+        this.conversationMemoryConstants = conversationMemoryConstants;
     }
 
     public void addMessage(String conversationId, ChatMessage message) {
 
-        String key = MemoryConstants.SESSION_PREFIX + conversationId;
+        String key = ConversationMemoryConstants.SESSION_PREFIX + conversationId;
 
         redisTemplate
                 .opsForList()
                 .rightPush(key, message);
 
-        redisTemplate.expire(key, memoryConstants.getTtl());
+        redisTemplate.expire(key, conversationMemoryConstants.getTtl());
     }
 
     @SuppressWarnings("unchecked")
     public List<ChatMessage> allRecentConversation(String conversationId){
-        String key = MemoryConstants.SESSION_PREFIX + conversationId;
+        String key = ConversationMemoryConstants.SESSION_PREFIX + conversationId;
         return (List<ChatMessage>)
                         (List<?>)
                                 redisTemplate

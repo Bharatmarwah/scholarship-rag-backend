@@ -6,13 +6,13 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 
 @Component
-public class MemoryConstants {
+public class ConversationMemoryConstants {
 
     public static final String SESSION_PREFIX = "conversation:";
 
     private final Duration ttl;
 
-    public MemoryConstants(@Value("${conversation.memory.ttl-hours}") long ttlHours) {
+    public ConversationMemoryConstants(@Value("${conversation.memory.ttl-hours}") long ttlHours) {
         this.ttl = Duration.ofHours(ttlHours);
     }
 

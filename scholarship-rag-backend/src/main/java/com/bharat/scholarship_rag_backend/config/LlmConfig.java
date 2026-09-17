@@ -26,6 +26,9 @@ public class LlmConfig {
     @Value("${gemini.model.name}")
     private String geminiModelName;
 
+    @Value("${embedding.dimension}")
+    private Integer embeddingDimension;
+
     @Bean
     public OpenAiChatModel chatModel() {
         return OpenAiChatModel.builder()
@@ -43,7 +46,7 @@ public class LlmConfig {
                 .apiKey(geminiApiKey)
                 .modelName(geminiModelName)
                 .taskType(GoogleAiEmbeddingModel.TaskType.RETRIEVAL_DOCUMENT)
-                .outputDimensionality(768)
+                .outputDimensionality(embeddingDimension)
                 .build();
     }
 
