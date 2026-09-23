@@ -1,7 +1,6 @@
 package com.bharat.scholarship_rag_backend.intent;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.stereotype.Component;
 
@@ -54,10 +53,6 @@ public class IntentClassification {
     }
 
     private IntentResponse deserialize(String rawResponse) {
-        try {
-            return objectMapper.readValue(rawResponse, IntentResponse.class);
-        } catch (JsonProcessingException e) {
-            return new IntentResponse(IntentType.UNKNOWN);
-        }
+        return objectMapper.readValue(rawResponse, IntentResponse.class);
     }
 }

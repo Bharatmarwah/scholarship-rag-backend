@@ -78,6 +78,8 @@ public class ChatOrchestrator {
                 ? queryEnricher.enrich(cleanedQuery, recentConversationMessages)
                 : cleanedQuery;
 
+        System.out.println("EnrichedQuery: "+enrichedQuery);
+
         // Intent classification
         IntentResponse intentResponse =
                 intentClassification.classify(enrichedQuery);
@@ -112,6 +114,8 @@ public class ChatOrchestrator {
                 String retrievalQuery =
                         retrievalQueryReformulator.
                                 reformulate(enrichedQuery, semanticMemories);
+
+                System.out.println("Reformulate Query through enrichedQuery and semanticMemories "+retrievalQuery);
 
 
                 // TODO: Retrieve relevant scholarship chunks from pgvector

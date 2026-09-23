@@ -24,6 +24,7 @@ public class SemanticMemory {
     private String context;
 
     @JdbcTypeCode(SqlTypes.VECTOR)
+    @Column(columnDefinition = "vector(768)")
     private float[] embedding;
 
     @Column(nullable = false)

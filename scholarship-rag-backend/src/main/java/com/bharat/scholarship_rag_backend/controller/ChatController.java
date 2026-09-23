@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/v1/api/")
+@RequestMapping("/v1/api")
 public class ChatController {
 
     private final ChatOrchestrator chatOrchestrator;
