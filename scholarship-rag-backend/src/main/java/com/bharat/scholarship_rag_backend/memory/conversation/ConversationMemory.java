@@ -31,10 +31,12 @@ public class ConversationMemory {
     @SuppressWarnings("unchecked")
     public List<ChatMessage> allRecentConversation(String conversationId){
         String key = ConversationMemoryConstants.SESSION_PREFIX + conversationId;
-        return (List<ChatMessage>)
+        List<ChatMessage> messages =
+                (List<ChatMessage>)
                         (List<?>)
                                 redisTemplate
                                         .opsForList()
                                         .range(key, -10, -1);
+        return messages == null ? List.of() : messages;
     }
 }

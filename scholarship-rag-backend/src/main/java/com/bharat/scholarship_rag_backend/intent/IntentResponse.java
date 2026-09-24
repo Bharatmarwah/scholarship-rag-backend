@@ -11,4 +11,8 @@ import lombok.NoArgsConstructor;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class IntentResponse {
     private IntentType type;
+
+    public static IntentResponse forType(IntentType type) {
+        return new IntentResponse(type);
+    }
 }

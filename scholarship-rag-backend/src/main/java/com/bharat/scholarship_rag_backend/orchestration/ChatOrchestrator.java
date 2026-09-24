@@ -3,7 +3,6 @@ package com.bharat.scholarship_rag_backend.orchestration;
 import com.bharat.scholarship_rag_backend.dto.request.ChatMessage;
 import com.bharat.scholarship_rag_backend.dto.request.ChatRequest;
 import com.bharat.scholarship_rag_backend.dto.response.ChatResponse;
-import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryResponse;
 import com.bharat.scholarship_rag_backend.embedding.QueryEmbedding;
 import com.bharat.scholarship_rag_backend.enrichment.QueryEnricher;
 import com.bharat.scholarship_rag_backend.enrichment.QueryGate;
@@ -12,10 +11,11 @@ import com.bharat.scholarship_rag_backend.intent.IntentResponse;
 import com.bharat.scholarship_rag_backend.memory.conversation.ConversationMemoryManager;
 import com.bharat.scholarship_rag_backend.memory.conversation.ConversationMemory;
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryManager;
-import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemorySelector;
+import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryResponse;
 import com.bharat.scholarship_rag_backend.retrieval.RetrievalQueryReformulator;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 public class ChatOrchestrator {
 
     private final OpenAiStreamingChatModel openAiStreamingChatModel;
@@ -36,7 +37,6 @@ public class ChatOrchestrator {
     private final SemanticMemoryManager semanticMemoryManager;
     private final QueryEmbedding queryEmbedding;
     private final RetrievalQueryReformulator retrievalQueryReformulator;
-    private final SemanticMemorySelector semanticMemorySelector;
 
     public ChatOrchestrator(
             OpenAiStreamingChatModel openAiStreamingChatModel,
@@ -47,8 +47,7 @@ public class ChatOrchestrator {
             IntentClassification intentClassification,
             SemanticMemoryManager semanticMemoryManager,
             QueryEmbedding queryEmbedding,
-            RetrievalQueryReformulator retrievalQueryReformulator,
-            SemanticMemorySelector semanticMemorySelector
+            RetrievalQueryReformulator retrievalQueryReformulator
     ) {
         this.openAiStreamingChatModel = openAiStreamingChatModel;
         this.conversationMemory = conversationMemory;
@@ -59,7 +58,6 @@ public class ChatOrchestrator {
         this.semanticMemoryManager = semanticMemoryManager;
         this.queryEmbedding = queryEmbedding;
         this.retrievalQueryReformulator = retrievalQueryReformulator;
-        this.semanticMemorySelector = semanticMemorySelector;
     }
 
     public ChatResponse processChat(ChatRequest chatRequest) {
@@ -78,7 +76,7 @@ public class ChatOrchestrator {
                 ? queryEnricher.enrich(cleanedQuery, recentConversationMessages)
                 : cleanedQuery;
 
-        System.out.println("EnrichedQuery: "+enrichedQuery);
+        log.info("Processing query {}", enrichedQuery);
 
         // Intent classification
         IntentResponse intentResponse =
@@ -104,12 +102,6 @@ public class ChatOrchestrator {
                                 queryEmbeddings
                         );
 
-                //reRanking
-                semanticMemories =
-                        semanticMemorySelector
-                                .select(semanticMemories);
-
-
                 // Reformulate Query through enrichedQuery and semanticMemories
                 String retrievalQuery =
                         retrievalQueryReformulator.
@@ -117,19 +109,11 @@ public class ChatOrchestrator {
 
                 System.out.println("Reformulate Query through enrichedQuery and semanticMemories "+retrievalQuery);
 
-
-                // TODO: Retrieve relevant scholarship chunks from pgvector
-
-                // TODO: Rerank/filter retrieved scholarship chunks
-
-                // TODO: Build final LLM context
-
-                // TODO: Generate final scholarship answer
-
-                // TODO: Add assistant response to conversation memory
-
-                // TODO: Extract and save new semantic memory if required
-                return new ChatResponse();
+                // enrichedQuery and semanticMemories flow into the retrieval/answer
+                // phase which runs after this branch.
+                chatResponse = new ChatResponse();
+                chatResponse.setConversationMemorySummary(null);
+                chatResponse.setSemanticMemorySummary(null);
             }
 
             case GENERAL_CHAT -> {
@@ -140,8 +124,7 @@ public class ChatOrchestrator {
                 // Generate general conversation response
                 String response = streamAnswer(
                         enrichedQuery,
-                        recentConversationMessages,
-                        List.of()
+                        recentConversationMessages
                 );
 
                 chatResponse = new ChatResponse();
@@ -179,12 +162,12 @@ public class ChatOrchestrator {
     }
 
 
-    private String streamAnswer(String query, List<ChatMessage> recentConversationMessages, List<SemanticMemoryResponse> context) {
+    private String streamAnswer(String query, List<ChatMessage> recentConversationMessages) {
         StringBuilder answer = new StringBuilder();
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<Throwable> errorRef = new AtomicReference<>();
 
-        String prompt = buildPrompt(query, recentConversationMessages, context);
+        String prompt = buildPrompt(query, recentConversationMessages);
 
         openAiStreamingChatModel.chat(prompt, new StreamingChatResponseHandler() {
             @Override
@@ -220,23 +203,16 @@ public class ChatOrchestrator {
         return answer.toString();
     }
 
-    private String buildPrompt(String query, List<ChatMessage> recentConversationMessages, List<SemanticMemoryResponse> context) {
+    private String buildPrompt(String query, List<ChatMessage> recentConversationMessages) {
         String history = recentConversationMessages.stream()
                 .map(message -> message.getRole() + ": " + message.getContent())
                 .collect(Collectors.joining("\n"));
 
-        String retrieved = context.stream()
-                .map(SemanticMemoryResponse::getContext)
-                .collect(Collectors.joining("\n\n"));
-
         StringBuilder prompt = new StringBuilder();
-        prompt.append("You are a helpful scholarship assistant. Answer using the provided context and conversation history.\n\n");
+        prompt.append("You are a helpful scholarship assistant. Answer using the conversation history.\n\n");
 
         if (!history.isBlank()) {
             prompt.append("Conversation history:\n").append(history).append("\n\n");
-        }
-        if (!retrieved.isBlank()) {
-            prompt.append("Context:\n").append(retrieved).append("\n\n");
         }
 
         prompt.append("User query: ").append(query);

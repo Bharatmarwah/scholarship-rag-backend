@@ -19,7 +19,8 @@ public class IntentClassification {
     public IntentResponse classify(String enrichedQuery) {
         String prompt = build(enrichedQuery);
         String rawResponse = openAiChatModel.chat(prompt);
-        return deserialize(rawResponse);
+        IntentResponse intent = deserialize(rawResponse);
+        return intent == null ? IntentResponse.forType(IntentType.UNKNOWN) : intent;
     }
 
     private String build(String enrichedQuery) {
@@ -28,12 +29,23 @@ public class IntentClassification {
 
                 Classify the user's query into exactly one intent type.
 
-                Allowed values:
-                - SCHOLARSHIP: questions about scholarships, schemes, eligibility,
-                  deadlines, applications, funding, financial aid, documents.
-                - GENERAL_CHAT: greetings, thanks, or casual conversation.
-                - UNKNOWN: anything off-topic, unrelated, unclear, or when you are
-                  not confident about the classification.
+                Allowed intent types:
+
+                - SCHOLARSHIP:
+                  Any request related to scholarships or scholarship schemes, including:
+                  scholarship eligibility, suitability, finding suitable scholarships,
+                  scheme information, benefits, funding, required documents,
+                  application process, deadlines, renewal, selection, requirements,
+                  eligibility conditions, or questions about a specific scholarship scheme.
+
+                - GENERAL_CHAT:
+                  Greetings, thanks, acknowledgements, casual conversation, or other
+                  social conversation that does not require scholarship information.
+
+                - UNKNOWN:
+                  Requests that are unrelated to scholarships and not ordinary
+                  casual conversation, or requests that remain genuinely
+                  uninterpretable even after considering the enriched query.
 
                 Rules:
                 1. Output exactly one JSON object and nothing else, in this shape:
@@ -53,6 +65,13 @@ public class IntentClassification {
     }
 
     private IntentResponse deserialize(String rawResponse) {
-        return objectMapper.readValue(rawResponse, IntentResponse.class);
+        if (rawResponse == null || rawResponse.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(rawResponse, IntentResponse.class);
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

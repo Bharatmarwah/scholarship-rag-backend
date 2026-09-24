@@ -17,8 +17,9 @@ public interface SemanticMemoryRepo extends JpaRepository<SemanticMemory, UUID> 
                 embedding <=> CAST(:queryEmbedding AS vector) AS distance
             FROM semantic_memories
             WHERE conversation_id = :conversationId
-            ORDER BY embedding  CAST(:queryEmbedding AS vector)
-            LIMIT :topK<=>
+              AND embedding <=> CAST(:queryEmbedding AS vector) <= 0.30
+            ORDER BY embedding <=> CAST(:queryEmbedding AS vector)
+            LIMIT :topK
             """, nativeQuery = true)
     List<SemanticMemoryResponse> findSimilarMemories(
             @Param("conversationId") String conversationId,
