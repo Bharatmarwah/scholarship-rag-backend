@@ -1,5 +1,8 @@
 package com.bharat.scholarship_rag_backend.orchestration;
 
+import com.bharat.scholarship_rag_backend.composer.QueryComposer;
+import com.bharat.scholarship_rag_backend.composer.QueryComposerResult;
+import com.bharat.scholarship_rag_backend.dto.StudentProfileDto;
 import com.bharat.scholarship_rag_backend.dto.request.ChatMessage;
 import com.bharat.scholarship_rag_backend.dto.request.ChatRequest;
 import com.bharat.scholarship_rag_backend.dto.response.ChatResponse;
@@ -13,6 +16,10 @@ import com.bharat.scholarship_rag_backend.memory.conversation.ConversationMemory
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryManager;
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryResponse;
 import com.bharat.scholarship_rag_backend.retrieval.RetrievalQueryReformulator;
+import com.bharat.scholarship_rag_backend.service.StudentProfileService;
+import com.bharat.scholarship_rag_backend.validator.ValidationEngine;
+import com.bharat.scholarship_rag_backend.validator.ValidationResult;
+import com.bharat.scholarship_rag_backend.validator.ValidationStatus;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import lombok.extern.slf4j.Slf4j;
@@ -36,7 +43,10 @@ public class ChatOrchestrator {
     private final IntentClassification intentClassification;
     private final SemanticMemoryManager semanticMemoryManager;
     private final QueryEmbedding queryEmbedding;
+    private final QueryComposer queryComposer;
+    private final StudentProfileService studentProfileService;
     private final RetrievalQueryReformulator retrievalQueryReformulator;
+    private final ValidationEngine validationEngine;
 
     public ChatOrchestrator(
             OpenAiStreamingChatModel openAiStreamingChatModel,
@@ -47,7 +57,10 @@ public class ChatOrchestrator {
             IntentClassification intentClassification,
             SemanticMemoryManager semanticMemoryManager,
             QueryEmbedding queryEmbedding,
-            RetrievalQueryReformulator retrievalQueryReformulator
+            QueryComposer queryComposer,
+            RetrievalQueryReformulator retrievalQueryReformulator,
+            StudentProfileService studentProfileService,
+            ValidationEngine validationEngine
     ) {
         this.openAiStreamingChatModel = openAiStreamingChatModel;
         this.conversationMemory = conversationMemory;
@@ -57,7 +70,10 @@ public class ChatOrchestrator {
         this.intentClassification = intentClassification;
         this.semanticMemoryManager = semanticMemoryManager;
         this.queryEmbedding = queryEmbedding;
+        this.queryComposer = queryComposer;
         this.retrievalQueryReformulator = retrievalQueryReformulator;
+        this.studentProfileService = studentProfileService;
+        this.validationEngine = validationEngine;
     }
 
     public ChatResponse processChat(ChatRequest chatRequest) {
@@ -102,18 +118,82 @@ public class ChatOrchestrator {
                                 queryEmbeddings
                         );
 
-                // Reformulate Query through enrichedQuery and semanticMemories
-                String retrievalQuery =
-                        retrievalQueryReformulator.
-                                reformulate(enrichedQuery, semanticMemories);
+                // Compose a self-contained query from the latest query (STM),
+                // conversation history (STM) and semantic memories (LTM), and
+                // extract the target scheme plus any stated profile values.
+                QueryComposerResult composerResult =
+                        queryComposer.compose(
+                                enrichedQuery,
+                                recentConversationMessages,
+                                semanticMemories
+                        );
 
-                System.out.println("Reformulate Query through enrichedQuery and semanticMemories "+retrievalQuery);
+                log.info("Composed query {} target scheme {}",
+                        composerResult.getCombinedQuery(),
+                        composerResult.getTargetScheme());
 
-                // enrichedQuery and semanticMemories flow into the retrieval/answer
-                // phase which runs after this branch.
-                chatResponse = new ChatResponse();
-                chatResponse.setConversationMemorySummary(null);
-                chatResponse.setSemanticMemorySummary(null);
+                //Get or create student profile
+                StudentProfileDto profile =
+                        studentProfileService
+                                .getOrCreate(chatRequest.getConversationId());
+
+                //Apply the profile values extracted by the composer, correcting
+                //existing fields only when the extracted value differs
+                profile = studentProfileService.applyExtracted(
+                        chatRequest.getConversationId(),
+                        composerResult.getExtractedValues()
+                );
+
+                // Validate the profile against the target scheme (or discovery
+                // mode when no scheme was named). Ask for missing information;
+                // only when every required field is present do we proceed to
+                // retrieval/answer.
+                ValidationResult validationResult =
+                        validationEngine.validate(
+                                profile,
+                                composerResult.getTargetScheme(),
+                                chatRequest.getConversationId()
+                        );
+
+                log.info("Validation status {} mode {} target scheme {}",
+                        validationResult.getStatus(),
+                        validationResult.getMode(),
+                        validationResult.getTargetScheme());
+
+                if (validationResult.getStatus() == ValidationStatus.MISSING_INFORMATION) {
+                    String validationQuestion = validationResult.getQuestion();
+
+                    chatResponse = new ChatResponse();
+                    chatResponse.setResponse(validationQuestion);
+                    chatResponse.setConversationMemorySummary(validationQuestion);
+                    chatResponse.setSemanticMemorySummary(null);
+
+                    conversationMemoryManager.addAssistantMessage(
+                            conversationId,
+                            chatResponse
+                    );
+                } else {
+                    // Reformulate Query through combinedQuery, semanticMemories
+                    // and student profile to return the best possible
+                    // scholarship chunks
+                    String retrievalQuery =
+                            retrievalQueryReformulator.
+                                    reformulate(
+                                            composerResult.getCombinedQuery(),
+                                            semanticMemories,
+                                            profile
+                                    );
+
+                    log.info("Reformulated query through combinedQuery, semanticMemories and student profile {}", retrievalQuery);
+
+
+
+                    // enrichedQuery and semanticMemories flow into the
+                    // retrieval/answer phase which runs after this branch.
+                    chatResponse = new ChatResponse();
+                    chatResponse.setConversationMemorySummary(null);
+                    chatResponse.setSemanticMemorySummary(null);
+                }
             }
 
             case GENERAL_CHAT -> {
