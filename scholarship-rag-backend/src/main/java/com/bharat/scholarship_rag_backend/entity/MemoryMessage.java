@@ -1,0 +1,32 @@
+package com.bharat.scholarship_rag_backend.entity;
+
+import com.bharat.scholarship_rag_backend.dto.request.MessageRole;
+import jakarta.persistence.*;
+import lombok.Data;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
+@Data
+@Entity
+@Table(name = "memories")
+public class MemoryMessage {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long memoryId;
+
+    @Column(nullable = false)
+    private MessageRole messageRole;
+
+    @Column(nullable = false)
+    private String context;
+
+    @JdbcTypeCode(SqlTypes.VECTOR)
+    @Column(name = "embedding", nullable = false, columnDefinition = "vector(768)")
+    private float[] embeddings;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "semantic_memory_id")
+    private SemanticMemory semanticMemory;
+
+}

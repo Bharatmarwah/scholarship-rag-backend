@@ -1,12 +1,14 @@
 package com.bharat.scholarship_rag_backend.memory.semantic;
 
+import com.bharat.scholarship_rag_backend.dto.request.MessageRole;
+import com.bharat.scholarship_rag_backend.entity.MemoryMessage;
 import com.bharat.scholarship_rag_backend.entity.SemanticMemory;
 import com.bharat.scholarship_rag_backend.repository.SemanticMemoryRepo;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 @Component
@@ -24,20 +26,39 @@ public class SemanticMemoryManager {
     @Transactional
     public void addSemanticMemory(SemanticMemoryRequest semanticMemoryRequest) {
         SemanticMemory memory = new SemanticMemory();
+
         memory.setConversationId(semanticMemoryRequest.getConversationId());
-        memory.setContext(semanticMemoryRequest.getContext());
-        memory.setEmbedding(semanticMemoryRequest.getEmbeddings());
-        memory.setCreatedAt(LocalDateTime.now());
+        memory.setCreatedAt(Instant.now());
+
+        MemoryMessage userMessage = buildMessage(
+                MessageRole.USER,
+                semanticMemoryRequest.getUserContext(),
+                semanticMemoryRequest.getUserEmbeddings());
+
+        MemoryMessage assistantMessage = buildMessage(
+                MessageRole.ASSISTANT,
+                semanticMemoryRequest.getAssistantContext(),
+                semanticMemoryRequest.getAssistantEmbeddings());
+
+        userMessage.setSemanticMemory(memory);
+        assistantMessage.setSemanticMemory(memory);
+
+        memory.setMemoryMessages(List.of(userMessage, assistantMessage));
 
         semanticMemoryRepo.save(memory);
     }
 
-
     @Transactional
     public List<SemanticMemoryResponse> listAllSemanticMemories(String conversationId, float[] queryEmbedding) {
         return semanticMemoryRepo
-                .findSimilarMemories(conversationId,queryEmbedding,topK);
+                .findSimilarMemories(conversationId, queryEmbedding, topK);
     }
 
-
+    private MemoryMessage buildMessage(MessageRole role, String context, float[] embeddings) {
+        MemoryMessage message = new MemoryMessage();
+        message.setMessageRole(role);
+        message.setContext(context);
+        message.setEmbeddings(embeddings);
+        return message;
+    }
 }

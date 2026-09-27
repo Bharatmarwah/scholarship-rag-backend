@@ -173,7 +173,7 @@ public class ChatOrchestrator {
                             chatResponse
                     );
                 } else {
-                    // Reformulate Query through combinedQuery, semanticMemories
+                    // Reformulate Query through combinedQuery, semanticMemories....
                     // and student profile to return the best possible
                     // scholarship chunks
                     String retrievalQuery =

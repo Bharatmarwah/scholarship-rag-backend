@@ -13,12 +13,13 @@ public interface SemanticMemoryRepo extends JpaRepository<SemanticMemory, UUID> 
 
     @Query(value = """
             SELECT
-                context,
-                embedding <=> CAST(:queryEmbedding AS vector) AS distance
-            FROM semantic_memories
-            WHERE conversation_id = :conversationId
-              AND embedding <=> CAST(:queryEmbedding AS vector) <= 0.30
-            ORDER BY embedding <=> CAST(:queryEmbedding AS vector)
+                m.context,
+                m.embedding <=> CAST(:queryEmbedding AS vector) AS distance
+            FROM memories m
+            JOIN semantic_memories sm ON sm.id = m.semantic_memory_id
+            WHERE sm.conversation_id = :conversationId
+              AND m.embedding <=> CAST(:queryEmbedding AS vector) <= 0.30
+            ORDER BY m.embedding <=> CAST(:queryEmbedding AS vector)
             LIMIT :topK
             """, nativeQuery = true)
     List<SemanticMemoryResponse> findSimilarMemories(
