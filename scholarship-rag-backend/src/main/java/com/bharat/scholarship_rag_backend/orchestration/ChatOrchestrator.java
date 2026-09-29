@@ -98,6 +98,8 @@ public class ChatOrchestrator {
         IntentResponse intentResponse =
                 intentClassification.classify(enrichedQuery);
 
+        log.info("Intent type {}",intentResponse.getType());
+
         // Response will be created by the corresponding intent flow
         ChatResponse chatResponse = null;
 
