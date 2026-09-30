@@ -112,12 +112,15 @@ public class QueryComposer {
                     institution type, nationality). These will be stored on the
                     student profile.
                 12. Use the exact field names: EDUCATION_LEVEL, COURSE, COURSE_TYPE,
-                    CURRENT_YEAR, CURRENT_CLASS, REGULAR_MODE, COMPLETED_UG_DEGREE,
-                    STUDY_LEVEL, CLASS12_PERCENTILE, BOARD, PREVIOUS_CLASS_MARKS,
-                    APPLICATION_TYPE, ADMISSION_RANK, ANNUAL_FAMILY_INCOME,
+                    CURRENT_YEAR, CURRENT_CLASS, REGULAR_MODE, STUDY_LEVEL,
+                    HAS_PRIOR_DEGREE, CLASS12_PERCENTILE, CLASS12_PASSED_YEAR, BOARD,
+                    STREAM, PREVIOUS_CLASS_MARKS, APPLICATION_TYPE, ADMISSION_RANK,
+                    NATIONALITY, GENDER, DATE_OF_BIRTH, ANNUAL_FAMILY_INCOME,
                     SOCIAL_CATEGORY, DOMICILE_STATE, INSTITUTION_NAME,
-                    INSTITUTION_TYPE, RECEIVING_OTHER_SCHOLARSHIP, HAS_DISABILITY,
-                    DISABILITY_PERCENTAGE, HAS_UDID_OR_UDID_ENROLLMENT, NATIONALITY.
+                    INSTITUTION_TYPE, RECEIVING_OTHER_SCHOLARSHIP,
+                    SIBLINGS_RECEIVING_BENEFIT, HAS_DISABILITY, DISABILITY_PERCENTAGE,
+                    DISABILITY_TYPE, HAS_VALID_DISABILITY_CERTIFICATE,
+                    HAS_UDID_OR_UDID_ENROLLMENT.
                 13. Only include a field when the user explicitly provided the value.
                     Do not infer, estimate or default values.
                 14. If nothing was stated, use an empty object.

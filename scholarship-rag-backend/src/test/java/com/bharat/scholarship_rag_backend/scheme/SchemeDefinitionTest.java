@@ -76,7 +76,7 @@ class SchemeDefinitionTest {
                         StudentProfileField.DOMICILE_STATE,
                         StudentProfileField.ANNUAL_FAMILY_INCOME,
                         StudentProfileField.REGULAR_MODE,
-                        StudentProfileField.COMPLETED_UG_DEGREE,
+                        StudentProfileField.HAS_PRIOR_DEGREE,
                         StudentProfileField.RECEIVING_OTHER_SCHOLARSHIP),
                 def.getEssentialFields());
     }

@@ -80,7 +80,7 @@ public class StudentProfileService {
             case "CURRENT_YEAR" -> applyInteger(raw, profile::getCurrentYear, profile::setCurrentYear);
             case "CURRENT_CLASS" -> applyInteger(raw, profile::getCurrentClass, profile::setCurrentClass);
             case "REGULAR_MODE" -> applyBoolean(raw, profile::getRegularMode, profile::setRegularMode);
-            case "COMPLETED_UG_DEGREE" ->
+            case "HAS_PRIOR_DEGREE" ->
                     applyBoolean(raw, profile::getCompletedUGDegree, profile::setCompletedUGDegree);
             case "CLASS12_PERCENTILE" ->
                     applyDouble(raw, profile::getClass12Percentile, profile::setClass12Percentile);
@@ -101,7 +101,9 @@ public class StudentProfileService {
                     applyInteger(raw, profile::getDisabilityPercentage, profile::setDisabilityPercentage);
             case "NATIONALITY" -> applyString(raw, profile::getNationality, profile::setNationality);
             case "COURSE_TYPE", "STUDY_LEVEL", "APPLICATION_TYPE", "ADMISSION_RANK",
-                    "HAS_UDID_OR_UDID_ENROLLMENT" -> {
+                    "HAS_VALID_DISABILITY_CERTIFICATE", "HAS_UDID_OR_UDID_ENROLLMENT",
+                    "SIBLINGS_RECEIVING_BENEFIT", "GENDER", "DATE_OF_BIRTH", "STREAM",
+                    "CLASS12_PASSED_YEAR", "DISABILITY_TYPE" -> {
                 log.debug("Skipping field {} (no profile column yet)", fieldName);
                 yield false;
             }

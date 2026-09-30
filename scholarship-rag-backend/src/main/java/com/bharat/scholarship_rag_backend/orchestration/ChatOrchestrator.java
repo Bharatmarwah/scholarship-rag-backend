@@ -15,6 +15,7 @@ import com.bharat.scholarship_rag_backend.memory.conversation.ConversationMemory
 import com.bharat.scholarship_rag_backend.memory.conversation.ConversationMemory;
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryManager;
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryResponse;
+import com.bharat.scholarship_rag_backend.retrieval.ReformulatedQuery;
 import com.bharat.scholarship_rag_backend.retrieval.RetrievalQueryReformulator;
 import com.bharat.scholarship_rag_backend.service.StudentProfileService;
 import com.bharat.scholarship_rag_backend.validator.ValidationEngine;
@@ -177,16 +178,20 @@ public class ChatOrchestrator {
                 } else {
                     // Reformulate Query through combinedQuery, semanticMemories....
                     // and student profile to return the best possible
-                    // scholarship chunks
-                    String retrievalQuery =
+                    // scholarship chunks. The resolved scheme travels with the
+                    // query so retrieval can filter on it.
+                    ReformulatedQuery reformulatedQuery =
                             retrievalQueryReformulator.
                                     reformulate(
                                             composerResult.getCombinedQuery(),
                                             semanticMemories,
-                                            profile
+                                            profile,
+                                            validationResult
                                     );
 
-                    log.info("Reformulated query through combinedQuery, semanticMemories and student profile {}", retrievalQuery);
+                    log.info("Reformulated query {} for schemes {}",
+                            reformulatedQuery.query(),
+                            reformulatedQuery.schemeNames());
 
 
 

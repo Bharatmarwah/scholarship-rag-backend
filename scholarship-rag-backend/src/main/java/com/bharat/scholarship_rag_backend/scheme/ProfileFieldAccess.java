@@ -33,7 +33,7 @@ public class ProfileFieldAccess {
             case CURRENT_YEAR -> profile.getCurrentYear();
             case CURRENT_CLASS -> profile.getCurrentClass();
             case REGULAR_MODE -> profile.getRegularMode();
-            case COMPLETED_UG_DEGREE -> profile.getCompletedUGDegree();
+            case HAS_PRIOR_DEGREE -> profile.getCompletedUGDegree();
             case CLASS12_PERCENTILE -> profile.getClass12Percentile();
             case BOARD -> profile.getBoard();
             case PREVIOUS_CLASS_MARKS -> profile.getPreviousClassMarks();
@@ -50,7 +50,8 @@ public class ProfileFieldAccess {
             // the profile does not store, are treated as missing.
             case COURSE_TYPE, STUDY_LEVEL, APPLICATION_TYPE, ADMISSION_RANK,
                     HAS_VALID_DISABILITY_CERTIFICATE, HAS_UDID_OR_UDID_ENROLLMENT,
-                    SIBLINGS_RECEIVING_BENEFIT -> null;
+                    SIBLINGS_RECEIVING_BENEFIT, GENDER, DATE_OF_BIRTH, STREAM,
+                    CLASS12_PASSED_YEAR, DISABILITY_TYPE -> null;
         };
     }
 

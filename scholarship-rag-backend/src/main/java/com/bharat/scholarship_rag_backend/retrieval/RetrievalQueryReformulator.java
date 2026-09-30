@@ -2,6 +2,8 @@ package com.bharat.scholarship_rag_backend.retrieval;
 
 import com.bharat.scholarship_rag_backend.dto.StudentProfileDto;
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryResponse;
+import com.bharat.scholarship_rag_backend.scheme.SchemeType;
+import com.bharat.scholarship_rag_backend.validator.ValidationResult;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.stereotype.Component;
 
@@ -17,10 +19,28 @@ public class RetrievalQueryReformulator {
         this.chatModel = chatModel;
     }
 
-    public String reformulate(
+    /**
+     * Reformulates the query and keeps the resolved scheme attached to it, so
+     * retrieval can filter on the scheme instead of relying on the query text
+     * alone.
+     *
+     * @param combinedQuery    self-contained query from the query composer
+     * @param semanticMemories relevant long-term memories, may be empty
+     * @param profile          student profile, may be null
+     * @param validation       validation result carrying the resolved scheme
+     *                         and the candidate schemes, may be null
+     */
+    public ReformulatedQuery reformulate(
             String combinedQuery,
             List<SemanticMemoryResponse> semanticMemories,
-            StudentProfileDto profile) {
+            StudentProfileDto profile,
+            ValidationResult validation) {
+
+        SchemeType targetScheme =
+                validation == null ? null : validation.getTargetScheme();
+        List<SchemeType> targetSchemes = validation == null
+                ? List.of()
+                : validation.getTargetSchemes();
 
         String memoryContext = semanticMemories.stream()
                 .map(SemanticMemoryResponse::getContext)
@@ -91,13 +111,49 @@ public class RetrievalQueryReformulator {
 
         String reformulated = chatModel.chat(prompt).trim();
 
-        if (reformulated.isEmpty() || reformulated.isBlank()) {
-            return combinedQuery;
+        String text;
+        if (reformulated == null || reformulated.isBlank()) {
+            text = combinedQuery;
+        } else if (reformulated.length() > combinedQuery.length() * 3 + 100) {
+            text = combinedQuery;
+        } else {
+            text = reformulated;
         }
-        if (reformulated.length() > combinedQuery.length() * 3 + 100) {
-            return combinedQuery;
+
+        return new ReformulatedQuery(
+                withSchemeName(text, targetScheme),
+                targetScheme,
+                candidates(targetScheme, targetSchemes));
+    }
+
+    /**
+     * Names the scheme inside the embedded text. Chunks are embedded with the
+     * scheme name in front of their content, so repeating it here keeps the
+     * query in the same region of the vector space as the chunks it must match.
+     */
+    private String withSchemeName(String text, SchemeType targetScheme) {
+        if (targetScheme == null) {
+            return text;
         }
-        return reformulated;
+        return targetScheme.name().replace('_', ' ') + ": " + text;
+    }
+
+    /**
+     * A named scheme scopes retrieval to itself. Discovery mode keeps every
+     * candidate the validator returned. An empty candidate list means no
+     * scheme is known, which the retrieval layer treats as unscoped.
+     */
+    private List<SchemeType> candidates(
+            SchemeType targetScheme,
+            List<SchemeType> targetSchemes) {
+
+        if (targetScheme != null) {
+            return List.of(targetScheme);
+        }
+        if (targetSchemes == null || targetSchemes.isEmpty()) {
+            return List.of();
+        }
+        return List.copyOf(targetSchemes);
     }
 
     private String buildProfileContext(StudentProfileDto profile) {
