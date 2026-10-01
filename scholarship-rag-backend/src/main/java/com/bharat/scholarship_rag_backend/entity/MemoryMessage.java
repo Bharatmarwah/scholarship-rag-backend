@@ -15,6 +15,11 @@ public class MemoryMessage {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long memoryId;
 
+    /**
+     * Persisted by name, not by ordinal: an ordinal column would silently
+     * re-interpret every stored message if this enum is ever reordered.
+     */
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private MessageRole messageRole;
 

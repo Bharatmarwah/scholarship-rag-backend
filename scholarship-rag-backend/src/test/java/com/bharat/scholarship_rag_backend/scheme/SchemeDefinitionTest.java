@@ -2,6 +2,8 @@ package com.bharat.scholarship_rag_backend.scheme;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -23,6 +25,114 @@ class SchemeDefinitionTest {
                         SchemeType.TOP_CLASS_SC,
                         SchemeType.TOP_CLASS_PWD),
                 Set.copyOf(registry.allSchemes()));
+    }
+
+    @Test
+    void resolveAllReturnsEveryNamedSchemeInRegistryOrder() {
+        assertEquals(
+                List.of(SchemeType.PM_YASASVI_TOP_CLASS_SCHOOLS, SchemeType.TOP_CLASS_SC),
+                registry.resolveAll("YASASVI and top class SC"));
+    }
+
+    @Test
+    void resolveAllAcceptsCommaSeparatedAndAmpersandSeparated() {
+        assertEquals(
+                List.of(SchemeType.ISHAN_UDAY, SchemeType.TOP_CLASS_PWD),
+                registry.resolveAll("ishan uday, top class pwd"));
+        assertEquals(
+                List.of(SchemeType.ISHAN_UDAY, SchemeType.TOP_CLASS_PWD),
+                registry.resolveAll("ishan uday & top class pwd"));
+    }
+
+    @Test
+    void resolveAllDoesNotInventSchemesFromPartialWords() {
+        // "disability" on its own is not an alias, and "top class" is only ever
+        // a full alias, so no scheme may be fabricated from the fragments.
+        assertEquals(
+                List.of(SchemeType.ISHAN_UDAY),
+                registry.resolveAll("ishan & disability top class"));
+    }
+
+    @Test
+    void resolveAllAcceptsBarePwdAbbreviation() {
+        assertEquals(
+                List.of(SchemeType.TOP_CLASS_PWD),
+                registry.resolveAll("PWD"));
+        assertEquals(
+                List.of(SchemeType.PM_YASASVI_TOP_CLASS_SCHOOLS, SchemeType.TOP_CLASS_PWD),
+                registry.resolveAll("YASASVI and PWD"));
+    }
+
+    @Test
+    void resolveAllCollapsesDuplicates() {
+        assertEquals(
+                List.of(SchemeType.PM_YASASVI_TOP_CLASS_SCHOOLS, SchemeType.TOP_CLASS_SC),
+                registry.resolveAll("YASASVI, top class sc, YASASVI"));
+    }
+
+    @Test
+    void repeatedSingleNameResolvesOnce() {
+        assertEquals(
+                List.of(SchemeType.TOP_CLASS_SC),
+                registry.resolveAll("top class sc, top class sc"));
+    }
+
+    @Test
+    void longestAliasWinsOverShorterAliasItContains() {
+        assertEquals(
+                List.of(SchemeType.TOP_CLASS_SC),
+                registry.resolveAll("top class sc for students of sc"));
+        assertEquals(
+                List.of(SchemeType.PM_USP_CSSS),
+                registry.resolveAll("PM-USP CSSS post matric"));
+    }
+
+    @Test
+    void resolveAllDropsUnknownPartsWithoutGuessing() {
+        assertEquals(
+                List.of(SchemeType.PM_YASASVI_TOP_CLASS_SCHOOLS),
+                registry.resolveAll("YASASVI and Care for U"));
+        assertEquals(List.of(), registry.resolveAll("Care for U, PG Indira, E-spark"));
+    }
+
+    @Test
+    void resolveAllIgnoresSurroundingText() {
+        assertEquals(List.of(SchemeType.PM_YASASVI_TOP_CLASS_SCHOOLS),
+                registry.resolveAll("top class schools"));
+    }
+
+    @Test
+    void resolveAllHandlesNullBlankAndNoScheme() {
+        assertEquals(List.of(), registry.resolveAll(null));
+        assertEquals(List.of(), registry.resolveAll("   "));
+        assertEquals(List.of(), registry.resolveAll("what is the income limit"));
+    }
+
+    @Test
+    void resolveAllReturnsEverySchemeForAllFiveNames() {
+        assertEquals(
+                registry.allSchemes(),
+                registry.resolveAll("PM-USP CSSS, Ishan Uday, YASASVI top class schools, top class SC, top class PWD"));
+    }
+
+    @Test
+    void resolveRejectsReferencesNamingMoreThanOneScheme() {
+        assertEquals(Optional.empty(), registry.resolve("YASASVI and Ishan Uday"));
+        assertEquals(Optional.of(SchemeType.TOP_CLASS_SC), registry.resolve("top class SC"));
+    }
+
+    @Test
+    void resolveIsCaseAndPunctuationInsensitive() {
+        assertEquals(Optional.of(SchemeType.PM_USP_CSSS), registry.resolve("PM-USP CSSS!"));
+        assertEquals(Optional.of(SchemeType.TOP_CLASS_PWD), registry.resolve("  Top_Class_PWD  "));
+    }
+
+    @Test
+    void everyAliasResolvesBackToItsScheme() {
+        for (String alias : registry.normalizedAliasKeys()) {
+            assertTrue(registry.resolve(alias).isPresent(),
+                    "alias must resolve: " + alias);
+        }
     }
 
     @Test

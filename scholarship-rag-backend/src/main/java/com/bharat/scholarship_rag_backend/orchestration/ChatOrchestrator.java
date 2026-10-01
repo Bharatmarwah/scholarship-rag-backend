@@ -17,6 +17,9 @@ import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryManager;
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryResponse;
 import com.bharat.scholarship_rag_backend.retrieval.ReformulatedQuery;
 import com.bharat.scholarship_rag_backend.retrieval.RetrievalQueryReformulator;
+import com.bharat.scholarship_rag_backend.retrieval.ScholarshipAnswerGenerator;
+import com.bharat.scholarship_rag_backend.retrieval.ScholarshipChunkMatch;
+import com.bharat.scholarship_rag_backend.retrieval.ScholarshipRetrieval;
 import com.bharat.scholarship_rag_backend.service.StudentProfileService;
 import com.bharat.scholarship_rag_backend.validator.ValidationEngine;
 import com.bharat.scholarship_rag_backend.validator.ValidationResult;
@@ -48,6 +51,8 @@ public class ChatOrchestrator {
     private final StudentProfileService studentProfileService;
     private final RetrievalQueryReformulator retrievalQueryReformulator;
     private final ValidationEngine validationEngine;
+    private final ScholarshipRetrieval scholarshipRetrieval;
+    private final ScholarshipAnswerGenerator scholarshipAnswerGenerator;
 
     public ChatOrchestrator(
             OpenAiStreamingChatModel openAiStreamingChatModel,
@@ -61,7 +66,9 @@ public class ChatOrchestrator {
             QueryComposer queryComposer,
             RetrievalQueryReformulator retrievalQueryReformulator,
             StudentProfileService studentProfileService,
-            ValidationEngine validationEngine
+            ValidationEngine validationEngine,
+            ScholarshipRetrieval scholarshipRetrieval,
+            ScholarshipAnswerGenerator scholarshipAnswerGenerator
     ) {
         this.openAiStreamingChatModel = openAiStreamingChatModel;
         this.conversationMemory = conversationMemory;
@@ -75,6 +82,8 @@ public class ChatOrchestrator {
         this.retrievalQueryReformulator = retrievalQueryReformulator;
         this.studentProfileService = studentProfileService;
         this.validationEngine = validationEngine;
+        this.scholarshipRetrieval = scholarshipRetrieval;
+        this.scholarshipAnswerGenerator = scholarshipAnswerGenerator;
     }
 
     public ChatResponse processChat(ChatRequest chatRequest) {
@@ -129,11 +138,11 @@ public class ChatOrchestrator {
                                 enrichedQuery,
                                 recentConversationMessages,
                                 semanticMemories
-                        );
+                        ); 
 
-                log.info("Composed query {} target scheme {}",
+                log.info("Composed query {} target schemes {}",
                         composerResult.getCombinedQuery(),
-                        composerResult.getTargetScheme());
+                        composerResult.getTargetSchemes());
 
                 //Get or create student profile
                 StudentProfileDto profile =
@@ -152,16 +161,16 @@ public class ChatOrchestrator {
                 // only when every required field is present do we proceed to
                 // retrieval/answer.
                 ValidationResult validationResult =
-                        validationEngine.validate(
+                        validationEngine.validateAll(
                                 profile,
-                                composerResult.getTargetScheme(),
+                                composerResult.getTargetSchemes(),
                                 chatRequest.getConversationId()
                         );
 
-                log.info("Validation status {} mode {} target scheme {}",
+                log.info("Validation status {} mode {} target schemes {}",
                         validationResult.getStatus(),
                         validationResult.getMode(),
-                        validationResult.getTargetScheme());
+                        validationResult.getTargetSchemes());
 
                 if (validationResult.getStatus() == ValidationStatus.MISSING_INFORMATION) {
                     String validationQuestion = validationResult.getQuestion();
@@ -193,13 +202,31 @@ public class ChatOrchestrator {
                             reformulatedQuery.query(),
                             reformulatedQuery.schemeNames());
 
+                    // Search the knowledge base. The resolved scheme list is a
+                    // hard filter so another scheme's rules can never be
+                    // presented as this scheme's answer.
+                    List<ScholarshipChunkMatch> matches =
+                            scholarshipRetrieval.search(
+                                    reformulatedQuery.query(),
+                                    reformulatedQuery.candidates());
 
+                    log.info("Retrieved {} chunks: {}", matches.size(),
+                            matches.stream().map(ScholarshipChunkMatch::citation).toList());
 
-                    // enrichedQuery and semanticMemories flow into the
-                    // retrieval/answer phase which runs after this branch.
+                    // Answer strictly from the retrieved chunks.
+                    String answer = scholarshipAnswerGenerator.answer(
+                            enrichedQuery,
+                            matches);
+
                     chatResponse = new ChatResponse();
+                    chatResponse.setResponse(answer);
                     chatResponse.setConversationMemorySummary(null);
                     chatResponse.setSemanticMemorySummary(null);
+
+                    conversationMemoryManager.addAssistantMessage(
+                            conversationId,
+                            chatResponse
+                    );
                 }
             }
 

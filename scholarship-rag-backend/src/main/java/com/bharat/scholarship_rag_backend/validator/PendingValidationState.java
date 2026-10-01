@@ -17,25 +17,38 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class PendingValidationState {
 
-    private record Pending(SchemeType targetScheme, List<StudentProfileField> askedFields) {
+    private record Pending(List<SchemeType> targetSchemes, List<StudentProfileField> askedFields) {
     }
 
     private final Map<String, Pending> pendingByConversation = new ConcurrentHashMap<>();
 
     public void store(String conversationId, SchemeType targetScheme, List<StudentProfileField> askedFields) {
-        if (conversationId == null || targetScheme == null) {
+        store(conversationId, targetScheme == null ? List.of() : List.of(targetScheme), askedFields);
+    }
+
+    public void store(String conversationId, List<SchemeType> targetSchemes, List<StudentProfileField> askedFields) {
+        if (conversationId == null || targetSchemes == null || targetSchemes.isEmpty()) {
             return;
         }
-        pendingByConversation.put(conversationId, new Pending(targetScheme, askedFields));
+        pendingByConversation.put(conversationId, new Pending(List.copyOf(targetSchemes), askedFields));
     }
 
     public boolean hasPending(String conversationId) {
         return conversationId != null && pendingByConversation.containsKey(conversationId);
     }
 
+    /**
+     * The single scheme being validated, or null when the pending intent spans
+     * several schemes and therefore has no single scheme to continue.
+     */
     public SchemeType targetScheme(String conversationId) {
+        List<SchemeType> schemes = targetSchemes(conversationId);
+        return schemes.size() == 1 ? schemes.getFirst() : null;
+    }
+
+    public List<SchemeType> targetSchemes(String conversationId) {
         Pending pending = pendingByConversation.get(conversationId);
-        return pending == null ? null : pending.targetScheme();
+        return pending == null ? List.of() : pending.targetSchemes();
     }
 
     public List<StudentProfileField> askedFields(String conversationId) {

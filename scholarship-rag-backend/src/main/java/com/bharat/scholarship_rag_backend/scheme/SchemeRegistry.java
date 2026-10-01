@@ -4,8 +4,10 @@ import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -77,18 +79,86 @@ public class SchemeRegistry {
 
     /**
      * Normalizes the raw scheme reference and maps it to a known scheme.
-     * Returns empty for unknown or unsupported references; it never guesses.
+     * Returns empty unless exactly one scheme is identified; it never guesses.
+     *
+     * <p>A reference that names several schemes is deliberately not accepted
+     * here. Use {@link #resolveAll(String)} for those.
      */
     public Optional<SchemeType> resolve(String rawScheme) {
+        List<SchemeType> resolved = resolveAll(rawScheme);
+        return resolved.size() == 1 ? Optional.of(resolved.getFirst()) : Optional.empty();
+    }
+
+    /**
+     * Resolves every scheme named in a raw reference, so that a comparison
+     * such as "YASASVI and Ishan Uday" keeps both schemes instead of one.
+     *
+     * <p>Parts are split on commas, "and" and "&amp;". Each part is resolved on
+     * its own and unknown parts are dropped rather than guessed. Duplicates
+     * collapse. The result follows registry order so callers get a stable
+     * list.
+     *
+     * @return the schemes actually named, possibly empty
+     */
+    public List<SchemeType> resolveAll(String rawScheme) {
         if (rawScheme == null || rawScheme.isBlank()) {
-            return Optional.empty();
+            return List.of();
         }
-        SchemeType matched = ALIASES.get(normalize(rawScheme));
-        return matched == null ? Optional.empty() : Optional.of(matched);
+        String normalized = normalize(rawScheme);
+        if (normalized.isEmpty()) {
+            return List.of();
+        }
+
+        // Aliases are matched longest first so that a specific reference wins
+        // over a shorter alias it contains: "topclasssc" must not be split
+        // into "topclass" leftovers, and "pmuspcsss" must beat "pmusp".
+        // A matched range is consumed so overlapping matches cannot fire.
+        Set<SchemeType> matched = new LinkedHashSet<>();
+        boolean[] consumed = new boolean[normalized.length()];
+
+        for (String alias : sortedAliasesByLengthDesc()) {
+            SchemeType scheme = ALIASES.get(alias);
+            int from = 0;
+            while (true) {
+                int at = normalized.indexOf(alias, from);
+                if (at < 0) {
+                    break;
+                }
+                int end = at + alias.length();
+                if (!isConsumed(consumed, at, end)) {
+                    matched.add(scheme);
+                    markConsumed(consumed, at, end);
+                }
+                from = at + 1;
+            }
+        }
+        return ALL.stream().filter(matched::contains).toList();
+    }
+
+    private static List<String> sortedAliasesByLengthDesc() {
+        return ALIASES.keySet().stream()
+                .sorted(Comparator.comparingInt(String::length).reversed()
+                        .thenComparing(Comparator.naturalOrder()))
+                .toList();
+    }
+
+    private static boolean isConsumed(boolean[] consumed, int from, int to) {
+        for (int i = from; i < to; i++) {
+            if (consumed[i]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void markConsumed(boolean[] consumed, int from, int to) {
+        for (int i = from; i < to; i++) {
+            consumed[i] = true;
+        }
     }
 
     private static String normalize(String raw) {
-        return raw.toLowerCase()
+        return raw.toLowerCase(Locale.ROOT)
                 .replaceAll("[^a-z0-9]+", "")
                 .trim();
     }
@@ -116,6 +186,7 @@ public class SchemeRegistry {
                 Map.entry("topclasssc", SchemeType.TOP_CLASS_SC),
                 Map.entry("topclasseducationforstudents", SchemeType.TOP_CLASS_SC),
                 Map.entry("topclasspwd", SchemeType.TOP_CLASS_PWD),
+                Map.entry("pwd", SchemeType.TOP_CLASS_PWD),
                 Map.entry("topclassdisabilities", SchemeType.TOP_CLASS_PWD),
                 Map.entry("topclasstudentswithdisabilities", SchemeType.TOP_CLASS_PWD)
         );

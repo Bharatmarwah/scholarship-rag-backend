@@ -40,6 +40,13 @@ public class LlmConfig {
                 .build();
     }
 
+    /**
+     * Single embedding model, shared by querying and by ingestion.
+     *
+     * <p>One bean on purpose: a query vector and a document vector are only
+     * comparable if they were produced the same way, so a single definition
+     * removes the chance of embedding one side with a different configuration.
+     */
     @Bean
     public EmbeddingModel embeddingModel() {
         return GoogleAiEmbeddingModel.builder()

@@ -5,6 +5,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
 import java.util.Map;
 
 @Data
@@ -15,11 +16,17 @@ public class QueryComposerResult {
 
     private String combinedQuery;
 
-    private String targetScheme;
+    /**
+     * Every scheme referred to in the inputs, as free-text names exactly as
+     * the model returned them. A comparison question carries more than one.
+     * Resolution to {@code SchemeType} happens only in the scheme registry,
+     * never from these strings directly.
+     */
+    private List<String> targetSchemes;
 
     private Map<String, Object> extractedValues;
 
     public static QueryComposerResult fallback(String combinedQuery) {
-        return new QueryComposerResult(combinedQuery, null, Map.of());
+        return new QueryComposerResult(combinedQuery, List.of(), Map.of());
     }
 }

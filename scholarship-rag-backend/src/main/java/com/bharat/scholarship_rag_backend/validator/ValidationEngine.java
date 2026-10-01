@@ -8,6 +8,8 @@ import com.bharat.scholarship_rag_backend.scheme.SchemeType;
 import com.bharat.scholarship_rag_backend.scheme.StudentProfileField;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -16,12 +18,14 @@ import java.util.Optional;
  * Deterministic validator. Decides only whether enough information is known:
  * READY or MISSING_INFORMATION. It never decides eligibility.
  *
- * <p>Mode selection (single intent continuity):
- * <pre>
- * current turn names a scheme        → SPECIFIC_SCHEME (overrides pending)
- * else pending scheme exists         → SPECIFIC_SCHEME (same intent continues)
- * else                               → SCHOLARSHIP_DISCOVERY
- * </pre>
+* <p>Mode selection (single intent continuity):
+     * <pre>
+     * current turn names a scheme        → SPECIFIC_SCHEME (overrides pending)
+     * current turn names many schemes    → MULTI_SCHEME (fields asked per scheme)
+     * else one scheme is pending         → SPECIFIC_SCHEME (same intent continues)
+     * else many schemes are pending      → MULTI_SCHEME (same comparison continues)
+     * else                               → SCHOLARSHIP_DISCOVERY
+     * </pre>
  *
  * <p>Discovery uses the cross-scheme screening order owned by the registry.
  * That order is NOT a set of fields essential for every scheme; each
@@ -32,6 +36,13 @@ import java.util.Optional;
  */
 @Component
 public class ValidationEngine {
+
+    /**
+     * How many missing fields are asked in a single multi-scheme turn. The
+     * union of two schemes' essentials can reach ten fields, which cannot be
+     * put to a student in one message.
+     */
+    private static final int MAX_FIELDS_PER_TURN = 3;
 
     private final SchemeRegistry schemeRegistry;
     private final ProfileFieldAccess profileFieldAccess;
@@ -49,42 +60,231 @@ public class ValidationEngine {
         this.pendingState = pendingState;
     }
 
+    /**
+     * Single-scheme entry point, kept for callers that resolve one scheme.
+     */
     public ValidationResult validate(
             StudentProfileDto profile,
             String rawTargetScheme,
             String conversationId) {
 
-        Optional<SchemeType> currentScheme = schemeRegistry.resolve(rawTargetScheme);
+        return validateAll(
+                profile,
+                rawTargetScheme == null ? List.<String>of() : List.of(rawTargetScheme),
+                conversationId);
+    }
 
+    /**
+     * Accepts every scheme referred to in the turn, so that a comparison
+     * question is not reduced to a single scheme.
+     *
+     * <p>Named {@code validateAll} rather than overloaded on {@link #validate}
+     * so that a call passing {@code null} stays unambiguous.
+     *
+     * <p>Mode selection:
+     * <pre>
+     * current turn names one scheme   → SPECIFIC_SCHEME (overrides pending)
+     * current turn names many schemes → MULTI_SCHEME
+     * else pending scheme exists      → SPECIFIC_SCHEME (same intent continues)
+     * else                            → SCHOLARSHIP_DISCOVERY
+     * </pre>
+     */
+    public ValidationResult validateAll(
+            StudentProfileDto profile,
+            List<String> rawTargetSchemes,
+            String conversationId) {
+        return validateForSchemes(profile, rawTargetSchemes, conversationId);
+    }
+
+    private ValidationResult validateForSchemes(
+            StudentProfileDto profile,
+            List<String> rawTargetSchemes,
+            String conversationId) {
+
+        List<SchemeType> namedSchemes =
+                resolveNamedSchemes(rawTargetSchemes);
+
+        // The schemes this turn is actually about: the ones named now, or the
+        // ones already in progress when nothing new was named.
+        List<SchemeType> activeSchemes;
         ValidationMode mode;
-        SchemeType targetScheme;
+        SchemeType targetScheme = null;
 
-        if (currentScheme.isPresent()) {
+        if (namedSchemes.size() > 1) {
+            // A newly named comparison overrides any single scheme in progress.
+            activeSchemes = namedSchemes;
+            mode = ValidationMode.MULTI_SCHEME;
+            pendingState.clear(conversationId);
+        } else if (namedSchemes.size() == 1) {
             // A scheme explicitly named this turn takes priority and starts
             // (or overrides) this single intent.
+            activeSchemes = namedSchemes;
             mode = ValidationMode.SPECIFIC_SCHEME;
-            targetScheme = currentScheme.get();
+            targetScheme = namedSchemes.getFirst();
             pendingState.clear(conversationId);
         } else if (pendingState.hasPending(conversationId)) {
-            // No scheme named this turn but a specific scheme is in progress
-            // for the same single intent (e.g. the user answered a question).
-            mode = ValidationMode.SPECIFIC_SCHEME;
-            targetScheme = pendingState.targetScheme(conversationId);
+            // No scheme named this turn, so the intent already in progress
+            // continues. It may itself span several schemes.
+            activeSchemes = pendingState.targetSchemes(conversationId);
+            mode = activeSchemes.size() > 1
+                    ? ValidationMode.MULTI_SCHEME
+                    : ValidationMode.SPECIFIC_SCHEME;
+            targetScheme = activeSchemes.size() == 1 ? activeSchemes.getFirst() : null;
         } else {
+            activeSchemes = List.of();
             mode = ValidationMode.SCHOLARSHIP_DISCOVERY;
-            targetScheme = null;
         }
 
         return switch (mode) {
             case SPECIFIC_SCHEME -> validateSpecific(profile, targetScheme, conversationId);
+            case MULTI_SCHEME -> validateMultiScheme(profile, activeSchemes, conversationId);
             case SCHOLARSHIP_DISCOVERY -> validateDiscovery(profile, conversationId);
         };
+    }
+
+    /**
+     * Resolves the raw references through the registry, which is the only
+     * place free text becomes a {@link SchemeType}. Names that do not resolve
+     * are dropped rather than guessed.
+     */
+    private List<SchemeType> resolveNamedSchemes(List<String> rawTargetSchemes) {
+        if (rawTargetSchemes == null || rawTargetSchemes.isEmpty()) {
+            return List.of();
+        }
+        List<SchemeType> resolved = new ArrayList<>();
+        for (String raw : rawTargetSchemes) {
+            for (SchemeType scheme : schemeRegistry.resolveAll(raw)) {
+                if (!resolved.contains(scheme)) {
+                    resolved.add(scheme);
+                }
+            }
+        }
+        return resolved;
+    }
+
+    /**
+     * A comparison question is answered from the named schemes together, so the
+     * fields needed by any of them are collected.
+     *
+     * <p>Unlike the single-scheme case there is no one checklist to complete:
+     * each scheme has its own essentials, and the union of what is still
+     * missing across all of them drives the question. Fields that cannot apply
+     * given the known education stage are skipped, exactly as in discovery, so
+     * a school student is never asked for a college year and vice versa.
+     *
+     * <p>Only the first {@link #MAX_FIELDS_PER_TURN} fields are asked each turn.
+     * The union of two schemes' essentials can reach ten fields, which is an
+     * unanswerable question; asking in batches converges over a few turns and
+     * each turn re-checks the profile before asking again.
+     */
+    private ValidationResult validateMultiScheme(
+            StudentProfileDto profile,
+            List<SchemeType> namedSchemes,
+            String conversationId) {
+
+        if (namedSchemes == null || namedSchemes.isEmpty()) {
+            return validateDiscovery(profile, conversationId);
+        }
+
+        List<SchemeType> schemes = List.copyOf(namedSchemes);
+
+        List<StudentProfileField> missing =
+                orderMissingFields(profile, missingFor(profile, schemes));
+
+        if (missing.isEmpty()) {
+            pendingState.clear(conversationId);
+            return ValidationResult.ready(ValidationMode.MULTI_SCHEME, null, schemes);
+        }
+
+        List<StudentProfileField> asked = missing.subList(
+                0, Math.min(missing.size(), MAX_FIELDS_PER_TURN));
+
+        pendingState.store(conversationId, schemes, List.copyOf(asked));
+        return ValidationResult.missing(
+                ValidationMode.MULTI_SCHEME,
+                null,
+                schemes,
+                asked,
+                questionBuilder.buildQuestion(asked),
+                "These details are needed to compare " + schemeNames(schemes) + ".");
+    }
+
+    /**
+     * Essential fields still absent from the profile, per named scheme. A field
+     * that cannot apply at the known education stage is left out, so a college
+     * student is never asked for their school class.
+     */
+    private List<List<StudentProfileField>> missingFor(
+            StudentProfileDto profile,
+            List<SchemeType> schemes) {
+
+        List<List<StudentProfileField>> missingByScheme = new ArrayList<>();
+        for (SchemeType scheme : schemes) {
+            List<StudentProfileField> missing = schemeRegistry.definition(scheme)
+                    .getEssentialFields().stream()
+                    .filter(field -> isApplicable(profile, field))
+                    .filter(field -> !profileFieldAccess.isPresent(profile, field))
+                    .toList();
+            missingByScheme.add(missing);
+        }
+        return missingByScheme;
+    }
+
+    /**
+     * Flattens the per-scheme missing lists into the order questions should be
+     * asked. Fields every named scheme needs come first, because one answer
+     * then satisfies all of them; the rest follow the cross-scheme discovery
+     * order and finally their scheme definition order, so the sequence is
+     * stable across turns.
+     */
+    private List<StudentProfileField> orderMissingFields(
+            StudentProfileDto profile,
+            List<List<StudentProfileField>> missingByScheme) {
+
+        LinkedHashSet<StudentProfileField> union = new LinkedHashSet<>();
+        for (List<StudentProfileField> missing : missingByScheme) {
+            union.addAll(missing);
+        }
+        if (union.size() <= MAX_FIELDS_PER_TURN) {
+            return List.copyOf(union);
+        }
+
+        List<StudentProfileField> shared = union.stream()
+                .filter(field -> missingByScheme.stream()
+                        .allMatch(missing -> missing.contains(field)))
+                .toList();
+
+        LinkedHashSet<StudentProfileField> ordered = new LinkedHashSet<>(shared);
+        // Only missing fields may be added here: the discovery order is a
+        // ranking of candidates, not a list of fields to ask regardless.
+        for (StudentProfileField field : schemeRegistry.discoveryOrder()) {
+            if (union.contains(field)) {
+                ordered.add(field);
+            }
+        }
+        ordered.addAll(union);
+
+        return List.copyOf(ordered);
+    }
+
+    private String schemeNames(List<SchemeType> schemes) {
+        return schemes.stream()
+                .map(SchemeType::name)
+                .map(name -> name.replace('_', ' '))
+                .collect(java.util.stream.Collectors.joining(", "));
     }
 
     private ValidationResult validateSpecific(
             StudentProfileDto profile,
             SchemeType targetScheme,
             String conversationId) {
+
+        if (targetScheme == null) {
+            // No single scheme is in progress, so there is no checklist to
+            // complete. Falling through avoids asking questions of an unknown
+            // scheme definition.
+            return validateDiscovery(profile, conversationId);
+        }
 
         SchemeDefinition definition = schemeRegistry.definition(targetScheme);
         List<StudentProfileField> missing = definition.getEssentialFields().stream()

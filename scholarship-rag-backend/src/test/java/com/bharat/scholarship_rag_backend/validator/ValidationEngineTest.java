@@ -329,6 +329,162 @@ class ValidationEngineTest {
         assertTrue(result.getMissingFields().contains(StudentProfileField.CURRENT_CLASS));
     }
 
+    // ================= MULTI_SCHEME =================
+
+    private StudentProfileDto pwdComplete() {
+        return StudentProfileDto.builder()
+                .nationality("Indian")
+                .educationLevel("UG")
+                .course("BCA")
+                .socialCategory("SC")
+                .annualFamilyIncome(new BigDecimal("300000"))
+                .hasDisability(true)
+                .disabilityPercentage(45)
+                .regularMode(true)
+                .institutionName("Delhi University")
+                .build();
+    }
+
+    // 19. multi-scheme collects the fields it is missing instead of returning READY
+    @Test
+    void multiSchemeCollectsMissingFields() {
+        ValidationResult result = engine.validateAll(
+                StudentProfileDto.builder().build(),
+                List.of("YASASVI", "Ishan Uday"),
+                "c1");
+
+        assertEquals(ValidationMode.MULTI_SCHEME, result.getMode());
+        assertEquals(ValidationStatus.MISSING_INFORMATION, result.getStatus());
+        assertNull(result.getTargetScheme());
+        assertEquals(List.of(SchemeType.PM_YASASVI_TOP_CLASS_SCHOOLS, SchemeType.ISHAN_UDAY),
+                result.getTargetSchemes());
+        assertFalse(result.getMissingFields().isEmpty());
+        assertTrue(result.getQuestion().contains("?"));
+    }
+
+    // 20. multi-scheme never asks more than one batch per turn
+    @Test
+    void multiSchemeBatchesQuestions() {
+        ValidationResult result = engine.validateAll(
+                StudentProfileDto.builder().build(),
+                List.of("YASASVI", "top class disabilities"),
+                "c1");
+
+        assertEquals(ValidationMode.MULTI_SCHEME, result.getMode());
+        assertTrue(result.getMissingFields().size() <= 3,
+                "expected at most 3 fields, got " + result.getMissingFields());
+    }
+
+    // 21. multi-scheme is READY once every named scheme's essentials are present
+    @Test
+    void multiSchemeReadyWhenAllPresent() {
+        ValidationResult result = engine.validateAll(
+                pwdComplete(),
+                List.of("YASASVI", "top class disabilities"),
+                "c1");
+
+        assertEquals(ValidationMode.MULTI_SCHEME, result.getMode());
+        assertEquals(ValidationStatus.READY, result.getStatus());
+        assertTrue(result.getMissingFields().isEmpty());
+        assertNull(result.getQuestion());
+    }
+
+    // 22. fields shared by both schemes are asked first
+    @Test
+    void multiSchemePrioritisesSharedFields() {
+        ValidationResult result = engine.validateAll(
+                StudentProfileDto.builder().educationLevel("UG").build(),
+                List.of("Ishan Uday", "PM-USP"),
+                "c1");
+
+        // COURSE, CURRENT_YEAR, INCOME and REGULAR_MODE are essential to both
+        // schemes, so one answer advances the comparison twice over.
+        List<StudentProfileField> asked = result.getMissingFields();
+        assertEquals(List.of(StudentProfileField.COURSE,
+                StudentProfileField.CURRENT_YEAR,
+                StudentProfileField.ANNUAL_FAMILY_INCOME), asked);
+    }
+
+    // 23. multi-scheme follow-up continues the same comparison
+    @Test
+    void multiSchemeFollowUpContinues() {
+        StudentProfileDto profile = pwdComplete();
+        profile.setCurrentClass(null);
+        profile.setSocialCategory(null);
+
+        ValidationResult first = engine.validateAll(profile, List.of("YASASVI", "PWD"), "c1");
+        assertEquals(ValidationMode.MULTI_SCHEME, first.getMode());
+
+        // The student answers without naming any scheme this turn.
+        profile.setCurrentClass(11);
+        ValidationResult second = engine.validateAll(profile, List.of(), "c1");
+
+        assertEquals(ValidationMode.MULTI_SCHEME, second.getMode());
+        assertEquals(List.of(SchemeType.PM_YASASVI_TOP_CLASS_SCHOOLS, SchemeType.TOP_CLASS_PWD),
+                second.getTargetSchemes());
+        assertEquals(List.of(StudentProfileField.SOCIAL_CATEGORY), second.getMissingFields());
+    }
+
+    // 24. naming a single scheme overrides a multi-scheme intent in progress
+    @Test
+    void singleSchemeOverridesMultiSchemePending() {
+        StudentProfileDto profile = StudentProfileDto.builder().build();
+
+        engine.validateAll(profile, List.of("YASASVI", "PWD"), "c1");
+
+        ValidationResult result = engine.validateAll(pmUspComplete(), List.of("PM-USP"), "c1");
+
+        assertEquals(ValidationMode.SPECIFIC_SCHEME, result.getMode());
+        assertEquals(SchemeType.PM_USP_CSSS, result.getTargetScheme());
+        assertEquals(ValidationStatus.READY, result.getStatus());
+    }
+
+    // 25. a college student is never asked for CURRENT_CLASS in multi-scheme
+    @Test
+    void multiSchemeSkipsInapplicableFields() {
+        ValidationResult result = engine.validateAll(
+                pwdComplete(),
+                List.of("YASASVI", "Ishan Uday"),
+                "c1");
+
+        assertEquals(ValidationMode.MULTI_SCHEME, result.getMode());
+        assertFalse(result.getMissingFields().contains(StudentProfileField.CURRENT_CLASS),
+                "college student must not be asked for school class");
+    }
+
+    // 25b. a school student is never asked for CURRENT_YEAR in multi-scheme
+    @Test
+    void multiSchemeSkipsInapplicableYear() {
+        ValidationResult result = engine.validateAll(
+                StudentProfileDto.builder()
+                        .educationLevel("Class 12")
+                        .course("PCM")
+                        .socialCategory("SC")
+                        .annualFamilyIncome(new BigDecimal("200000"))
+                        .regularMode(true)
+                        .institutionName("Govt Senior Secondary School")
+                        .build(),
+                List.of("YASASVI", "Ishan Uday"),
+                "c1");
+
+        assertEquals(ValidationMode.MULTI_SCHEME, result.getMode());
+        assertFalse(result.getMissingFields().contains(StudentProfileField.CURRENT_YEAR),
+                "school student must not be asked for college year");
+    }
+
+    // 26. multi-scheme never decides eligibility, only completeness
+    @Test
+    void multiSchemeNeverDecidesEligibility() {
+        for (ValidationResult result : List.of(
+                engine.validateAll(StudentProfileDto.builder().build(),
+                        List.of("YASASVI", "Ishan Uday"), "c1"),
+                engine.validateAll(pwdComplete(), List.of("YASASVI", "PWD"), "c1"))) {
+            assertEquals(ValidationMode.MULTI_SCHEME, result.getMode());
+            assertTrue(result.getStatus() == ValidationStatus.READY
+                    || result.getStatus() == ValidationStatus.MISSING_INFORMATION);
+        }
+    }
+
     // Continuation: pending scheme drives the next turn (same single intent)
     @Test
     void pendingSchemeContinuesSameIntent() {
