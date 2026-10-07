@@ -59,7 +59,7 @@ public class StudentProfileService {
 
         boolean changed = false;
         for (Map.Entry<String, Object> entry : extractedValues.entrySet()) {
-            changed |= applyValue(profile, entry.getKey(), entry.getValue());
+            changed = changed | applyValue(profile, entry.getKey(), entry.getValue());
         }
 
         if (isNew || changed) {

@@ -27,8 +27,8 @@ class ScholarshipAnswerGeneratorTest {
     void refusesToAnswerWhenNothingWasRetrieved() {
         ScholarshipAnswerGenerator generator = generator();
 
-        assertEquals(ScholarshipAnswerGenerator.NO_CONTEXT_ANSWER, generator.answer("q", List.of()));
-        assertEquals(ScholarshipAnswerGenerator.NO_CONTEXT_ANSWER, generator.answer("q", null));
+        assertEquals(ScholarshipAnswerGenerator.NO_CONTEXT_ANSWER, generator.answer("q", List.of()).getResponse());
+        assertEquals(ScholarshipAnswerGenerator.NO_CONTEXT_ANSWER, generator.answer("q", null).getResponse());
     }
 
     @Test
@@ -82,6 +82,6 @@ class ScholarshipAnswerGeneratorTest {
                 .apiKey("unused")
                 .modelName("unused")
                 .maxRetries(0)
-                .build());
+                .build(), new tools.jackson.databind.ObjectMapper());
     }
 }

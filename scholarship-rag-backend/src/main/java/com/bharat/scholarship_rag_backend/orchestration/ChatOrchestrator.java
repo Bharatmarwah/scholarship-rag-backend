@@ -14,6 +14,7 @@ import com.bharat.scholarship_rag_backend.intent.IntentResponse;
 import com.bharat.scholarship_rag_backend.memory.conversation.ConversationMemoryManager;
 import com.bharat.scholarship_rag_backend.memory.conversation.ConversationMemory;
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryManager;
+import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryRequest;
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryResponse;
 import com.bharat.scholarship_rag_backend.retrieval.ReformulatedQuery;
 import com.bharat.scholarship_rag_backend.retrieval.RetrievalQueryReformulator;
@@ -102,7 +103,7 @@ public class ChatOrchestrator {
                 ? queryEnricher.enrich(cleanedQuery, recentConversationMessages)
                 : cleanedQuery;
 
-        log.info("Processing query {}", enrichedQuery);
+        log.info("Processed query {}", enrichedQuery);
 
         // Intent classification
         IntentResponse intentResponse =
@@ -214,18 +215,28 @@ public class ChatOrchestrator {
                             matches.stream().map(ScholarshipChunkMatch::citation).toList());
 
                     // Answer strictly from the retrieved chunks.
-                    String answer = scholarshipAnswerGenerator.answer(
+                    ChatResponse response = scholarshipAnswerGenerator.answer(
                             enrichedQuery,
                             matches);
 
-                    chatResponse = new ChatResponse();
-                    chatResponse.setResponse(answer);
-                    chatResponse.setConversationMemorySummary(null);
-                    chatResponse.setSemanticMemorySummary(null);
+                    // Save semantic memory for this exchange
+                    try {
+                        semanticMemoryManager.addSemanticMemory(
+                                new SemanticMemoryRequest(
+                                        conversationId,
+                                        enrichedQuery,
+                                        queryEmbeddings,
+                                        response.getResponse(),
+                                        queryEmbeddings
+                                )
+                        );
+                    } catch (Exception e) {
+                        log.warn("Failed to save semantic memory for conversation {}", conversationId, e);
+                    }
 
                     conversationMemoryManager.addAssistantMessage(
                             conversationId,
-                            chatResponse
+                            response
                     );
                 }
             }
