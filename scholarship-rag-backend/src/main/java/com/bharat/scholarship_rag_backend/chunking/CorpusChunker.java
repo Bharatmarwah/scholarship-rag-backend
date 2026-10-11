@@ -230,7 +230,7 @@ public final class CorpusChunker {
         CorpusChunker chunker = new CorpusChunker();
         List<TextChunk> chunks = chunker.chunkAll();
 
-        Path out = Path.of(args.length > 0 ? args[0] : "target/chunk-review.txt");
+        Path out = Path.of(args.length > 0 ? args[0] : ".chunking/chunk-review.txt");
         chunker.writeReviewDump(chunks, out);
 
         System.out.println(new ChunkingReport(chunks).render());

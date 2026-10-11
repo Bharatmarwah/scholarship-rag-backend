@@ -2,6 +2,7 @@ package com.bharat.scholarship_rag_backend.service;
 
 import com.bharat.scholarship_rag_backend.dto.StudentProfileDto;
 import com.bharat.scholarship_rag_backend.entity.StudentProfile;
+import com.bharat.scholarship_rag_backend.normalization.ProfileValueNormalizer;
 import com.bharat.scholarship_rag_backend.repository.StudentProfileRepo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -10,29 +11,54 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.function.DoublePredicate;
+import java.util.function.Function;
+import java.util.function.IntPredicate;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
-@Service
 @Slf4j
+@Service
 public class StudentProfileService {
 
-    private final StudentProfileRepo studentProfileRepo;
+    private static final BigDecimal MAX_ANNUAL_INCOME = BigDecimal.valueOf(100_000_000L);
 
-    public StudentProfileService(StudentProfileRepo studentProfileRepo) {
+    private static final IntPredicate YEAR_PLAUSIBLE = value -> value >= 1 && value <= 8;
+    private static final IntPredicate CLASS_PLAUSIBLE = value -> value >= 1 && value <= 12;
+    private static final IntPredicate PERCENT_PLAUSIBLE = value -> value >= 1 && value <= 100;
+    private static final DoublePredicate MARKS_PLAUSIBLE = value -> value >= 1 && value <= 100;
+    private static final Predicate<BigDecimal> INCOME_PLAUSIBLE = value ->
+            value.signum() >= 0 && value.compareTo(MAX_ANNUAL_INCOME) <= 0;
+
+    /**
+     * Whether an extracted field changes its value, stays the same, or is
+     * rejected. Rejected values are logged so a wrong extraction is visible
+     * instead of silently looping.
+     */
+    private enum ApplyOutcome {
+        APPLIED,
+        UNCHANGED,
+        REJECTED
+    }
+
+    private final StudentProfileRepo studentProfileRepo;
+    private final ProfileValueNormalizer profileValueNormalizer;
+
+    public StudentProfileService(
+            StudentProfileRepo studentProfileRepo,
+            ProfileValueNormalizer profileValueNormalizer) {
         this.studentProfileRepo = studentProfileRepo;
+        this.profileValueNormalizer = profileValueNormalizer;
     }
 
     @Transactional
     public StudentProfileDto getOrCreate(String conversationId) {
+        upsertProfileRow(conversationId);
         StudentProfile profile = studentProfileRepo.findByConversationId(conversationId)
-                .orElseGet(() -> {
-                    StudentProfile created = new StudentProfile();
-                    created.setConversationId(conversationId);
-                    created.setCreatedAt(LocalDateTime.now());
-                    created.setUpdatedAt(LocalDateTime.now());
-                    return studentProfileRepo.save(created);
-                });
+                .orElseThrow(() -> new IllegalStateException(
+                        "Student profile must exist after upsert for conversation " + conversationId));
         return toDto(profile);
     }
 
@@ -52,14 +78,21 @@ public class StudentProfileService {
         boolean isNew = profile == null;
 
         if (isNew) {
-            profile = new StudentProfile();
-            profile.setConversationId(conversationId);
-            profile.setCreatedAt(LocalDateTime.now());
+            upsertProfileRow(conversationId);
+            profile = studentProfileRepo.findByConversationId(conversationId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Student profile must exist after upsert for conversation " + conversationId));
         }
 
         boolean changed = false;
         for (Map.Entry<String, Object> entry : extractedValues.entrySet()) {
-            changed = changed | applyValue(profile, entry.getKey(), entry.getValue());
+            ApplyOutcome outcome = applyValue(profile, entry.getKey(), entry.getValue());
+            if (outcome == ApplyOutcome.APPLIED) {
+                changed = true;
+            } else if (outcome == ApplyOutcome.REJECTED) {
+                log.warn("Extracted value for '{}' was rejected and left unset (raw='{}')",
+                        entry.getKey(), safeForLog(entry.getValue()));
+            }
         }
 
         if (isNew || changed) {
@@ -70,26 +103,58 @@ public class StudentProfileService {
         return toDto(profile);
     }
 
-    private boolean applyValue(StudentProfile profile, String fieldName, Object raw) {
+    private String safeForLog(Object raw) {
+        if (raw instanceof CharSequence text) {
+            String trimmed = text.toString();
+            return trimmed.length() <= 80 ? trimmed : trimmed.substring(0, 80) + "...";
+        }
+        return String.valueOf(raw);
+    }
+
+    /**
+     * Creates the profile row atomically when it does not exist yet, using a
+     * database-level {@code INSERT ... ON CONFLICT DO NOTHING}. Concurrent
+     * requests for the same conversation share one row, and the UNIQUE
+     * constraint on {@code conversation_id} is preserved.
+     */
+    private void upsertProfileRow(String conversationId) {
+        studentProfileRepo.insertIfAbsent(
+                UUID.randomUUID(),
+                conversationId,
+                LocalDateTime.now());
+    }
+
+    private ApplyOutcome applyValue(StudentProfile profile, String fieldName, Object raw) {
         if (fieldName == null || raw == null) {
-            return false;
+            return ApplyOutcome.UNCHANGED;
         }
         return switch (fieldName) {
-            case "EDUCATION_LEVEL" -> applyString(raw, profile::getEducationLevel, profile::setEducationLevel);
-            case "COURSE" -> applyString(raw, profile::getCourse, profile::setCourse);
-            case "CURRENT_YEAR" -> applyInteger(raw, profile::getCurrentYear, profile::setCurrentYear);
-            case "CURRENT_CLASS" -> applyInteger(raw, profile::getCurrentClass, profile::setCurrentClass);
+            case "EDUCATION_LEVEL" ->
+                    applyNormalizedString(raw, profileValueNormalizer::normalizeEducationLevel,
+                            profile::getEducationLevel, profile::setEducationLevel);
+            case "COURSE" ->
+                    applyNormalizedString(raw, profileValueNormalizer::normalizeCourse,
+                            profile::getCourse, profile::setCourse);
+            case "CURRENT_YEAR" ->
+                    applyInteger(raw, YEAR_PLAUSIBLE, profile::getCurrentYear, profile::setCurrentYear);
+            case "CURRENT_CLASS" ->
+                    applyInteger(raw, CLASS_PLAUSIBLE, profile::getCurrentClass, profile::setCurrentClass);
             case "REGULAR_MODE" -> applyBoolean(raw, profile::getRegularMode, profile::setRegularMode);
             case "HAS_PRIOR_DEGREE" ->
                     applyBoolean(raw, profile::getCompletedUGDegree, profile::setCompletedUGDegree);
             case "CLASS12_PERCENTILE" ->
-                    applyDouble(raw, profile::getClass12Percentile, profile::setClass12Percentile);
+                    applyDouble(raw, MARKS_PLAUSIBLE, profile::getClass12Percentile,
+                            profile::setClass12Percentile);
             case "BOARD" -> applyString(raw, profile::getBoard, profile::setBoard);
             case "PREVIOUS_CLASS_MARKS" ->
-                    applyDouble(raw, profile::getPreviousClassMarks, profile::setPreviousClassMarks);
+                    applyDouble(raw, MARKS_PLAUSIBLE, profile::getPreviousClassMarks,
+                            profile::setPreviousClassMarks);
             case "ANNUAL_FAMILY_INCOME" ->
-                    applyBigDecimal(raw, profile::getAnnualFamilyIncome, profile::setAnnualFamilyIncome);
-            case "SOCIAL_CATEGORY" -> applyString(raw, profile::getSocialCategory, profile::setSocialCategory);
+                    applyBigDecimal(raw, INCOME_PLAUSIBLE, profile::getAnnualFamilyIncome,
+                            profile::setAnnualFamilyIncome);
+            case "SOCIAL_CATEGORY" ->
+                    applyNormalizedString(raw, profileValueNormalizer::normalizeSocialCategory,
+                            profile::getSocialCategory, profile::setSocialCategory);
             case "DOMICILE_STATE" -> applyString(raw, profile::getDomicileState, profile::setDomicileState);
             case "INSTITUTION_NAME" -> applyString(raw, profile::getInstitutionName, profile::setInstitutionName);
             case "INSTITUTION_TYPE" -> applyString(raw, profile::getInstitutionType, profile::setInstitutionType);
@@ -98,45 +163,110 @@ public class StudentProfileService {
                             profile::setReceivingOtherScholarship);
             case "HAS_DISABILITY" -> applyBoolean(raw, profile::getHasDisability, profile::setHasDisability);
             case "DISABILITY_PERCENTAGE" ->
-                    applyInteger(raw, profile::getDisabilityPercentage, profile::setDisabilityPercentage);
+                    applyInteger(raw, PERCENT_PLAUSIBLE, profile::getDisabilityPercentage,
+                            profile::setDisabilityPercentage);
             case "NATIONALITY" -> applyString(raw, profile::getNationality, profile::setNationality);
             case "COURSE_TYPE", "STUDY_LEVEL", "APPLICATION_TYPE", "ADMISSION_RANK",
                     "HAS_VALID_DISABILITY_CERTIFICATE", "HAS_UDID_OR_UDID_ENROLLMENT",
                     "SIBLINGS_RECEIVING_BENEFIT", "GENDER", "DATE_OF_BIRTH", "STREAM",
                     "CLASS12_PASSED_YEAR", "DISABILITY_TYPE" -> {
                 log.debug("Skipping field {} (no profile column yet)", fieldName);
-                yield false;
+                yield ApplyOutcome.UNCHANGED;
             }
             default -> {
                 log.debug("Skipping unknown field {}", fieldName);
-                yield false;
+                yield ApplyOutcome.UNCHANGED;
             }
         };
     }
 
-    private boolean applyString(Object raw, Supplier<String> getter, Consumer<String> setter) {
+    private ApplyOutcome applyString(Object raw, Supplier<String> getter, Consumer<String> setter) {
         String value = toText(raw);
-        return setIfChanged(getter.get(), value, setter);
+        if (value == null) {
+            return ApplyOutcome.REJECTED;
+        }
+        return setIfChanged(getter.get(), value, setter)
+                ? ApplyOutcome.APPLIED
+                : ApplyOutcome.UNCHANGED;
     }
 
-    private boolean applyInteger(Object raw, Supplier<Integer> getter, Consumer<Integer> setter) {
+    /**
+     * Canonicalizes the text through the rule-based normalizer before storing.
+     * If normalization returns null or blank the cleaned text is stored anyway,
+     * so an unrecognized value is never rejected and never loops.
+     */
+    private ApplyOutcome applyNormalizedString(
+            Object raw,
+            Function<String, String> normalize,
+            Supplier<String> getter,
+            Consumer<String> setter) {
+
+        String cleaned = toText(raw);
+        if (cleaned == null) {
+            return ApplyOutcome.REJECTED;
+        }
+        String value = normalize.apply(cleaned);
+        if (value == null || value.isBlank()) {
+            value = cleaned;
+        }
+        return setIfChanged(getter.get(), value, setter)
+                ? ApplyOutcome.APPLIED
+                : ApplyOutcome.UNCHANGED;
+    }
+
+    private ApplyOutcome applyInteger(
+            Object raw,
+            IntPredicate plausible,
+            Supplier<Integer> getter,
+            Consumer<Integer> setter) {
+
         Integer value = toInteger(raw);
-        return value != null && setIfChanged(getter.get(), value, setter);
+        if (value == null || !plausible.test(value)) {
+            return ApplyOutcome.REJECTED;
+        }
+        return setIfChanged(getter.get(), value, setter)
+                ? ApplyOutcome.APPLIED
+                : ApplyOutcome.UNCHANGED;
     }
 
-    private boolean applyBoolean(Object raw, Supplier<Boolean> getter, Consumer<Boolean> setter) {
+    private ApplyOutcome applyBoolean(Object raw, Supplier<Boolean> getter, Consumer<Boolean> setter) {
         Boolean value = toBoolean(raw);
-        return value != null && setIfChanged(getter.get(), value, setter);
+        if (value == null) {
+            return ApplyOutcome.REJECTED;
+        }
+        return setIfChanged(getter.get(), value, setter)
+                ? ApplyOutcome.APPLIED
+                : ApplyOutcome.UNCHANGED;
     }
 
-    private boolean applyDouble(Object raw, Supplier<Double> getter, Consumer<Double> setter) {
+    private ApplyOutcome applyDouble(
+            Object raw,
+            DoublePredicate plausible,
+            Supplier<Double> getter,
+            Consumer<Double> setter) {
+
         Double value = toDouble(raw);
-        return value != null && setIfChanged(getter.get(), value, setter);
+        if (value == null || !plausible.test(value)) {
+            return ApplyOutcome.REJECTED;
+        }
+        return setIfChanged(getter.get(), value, setter)
+                ? ApplyOutcome.APPLIED
+                : ApplyOutcome.UNCHANGED;
     }
 
-    private boolean applyBigDecimal(Object raw, Supplier<BigDecimal> getter, Consumer<BigDecimal> setter) {
+    private ApplyOutcome applyBigDecimal(
+            Object raw,
+            Predicate<BigDecimal> plausible,
+            Supplier<BigDecimal> getter,
+            Consumer<BigDecimal> setter) {
+
         BigDecimal value = toBigDecimal(raw);
-        return value != null && setIfChanged(getter.get(), value, setter);
+        if (value == null || !plausible.test(value)) {
+            return ApplyOutcome.REJECTED;
+        }
+        return setIfChanged(getter.get(), value, setter)
+                ? ApplyOutcome.APPLIED
+                : ApplyOutcome.UNCHANGED;
     }
 
     private <T> boolean setIfChanged(T current, T value, Consumer<T> setter) {
@@ -151,7 +281,13 @@ public class StudentProfileService {
     }
 
     private String toText(Object raw) {
-        return raw == null ? null : String.valueOf(raw);
+        if (raw instanceof CharSequence text) {
+            return text.toString();
+        }
+        if (raw instanceof Number number) {
+            return number.toString();
+        }
+        return null;
     }
 
     private Integer toInteger(Object raw) {

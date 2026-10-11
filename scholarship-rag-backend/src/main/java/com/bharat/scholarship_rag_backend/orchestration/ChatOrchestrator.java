@@ -5,23 +5,29 @@ import com.bharat.scholarship_rag_backend.composer.QueryComposerResult;
 import com.bharat.scholarship_rag_backend.dto.StudentProfileDto;
 import com.bharat.scholarship_rag_backend.dto.request.ChatMessage;
 import com.bharat.scholarship_rag_backend.dto.request.ChatRequest;
+import com.bharat.scholarship_rag_backend.dto.request.MessageRole;
 import com.bharat.scholarship_rag_backend.dto.response.ChatResponse;
 import com.bharat.scholarship_rag_backend.embedding.QueryEmbedding;
 import com.bharat.scholarship_rag_backend.enrichment.QueryEnricher;
 import com.bharat.scholarship_rag_backend.enrichment.QueryGate;
 import com.bharat.scholarship_rag_backend.intent.IntentClassification;
 import com.bharat.scholarship_rag_backend.intent.IntentResponse;
+import com.bharat.scholarship_rag_backend.intent.IntentType;
 import com.bharat.scholarship_rag_backend.memory.conversation.ConversationMemoryManager;
 import com.bharat.scholarship_rag_backend.memory.conversation.ConversationMemory;
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryManager;
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryRequest;
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryResponse;
+import com.bharat.scholarship_rag_backend.normalization.ProfileValueNormalizer;
 import com.bharat.scholarship_rag_backend.retrieval.ReformulatedQuery;
 import com.bharat.scholarship_rag_backend.retrieval.RetrievalQueryReformulator;
 import com.bharat.scholarship_rag_backend.retrieval.ScholarshipAnswerGenerator;
 import com.bharat.scholarship_rag_backend.retrieval.ScholarshipChunkMatch;
 import com.bharat.scholarship_rag_backend.retrieval.ScholarshipRetrieval;
+import com.bharat.scholarship_rag_backend.scheme.StudentProfileField;
 import com.bharat.scholarship_rag_backend.service.StudentProfileService;
+import com.bharat.scholarship_rag_backend.validator.PendingAnswerResolver;
+import com.bharat.scholarship_rag_backend.validator.PendingValidationState;
 import com.bharat.scholarship_rag_backend.validator.ValidationEngine;
 import com.bharat.scholarship_rag_backend.validator.ValidationResult;
 import com.bharat.scholarship_rag_backend.validator.ValidationStatus;
@@ -30,7 +36,9 @@ import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -50,6 +58,9 @@ public class ChatOrchestrator {
     private final QueryEmbedding queryEmbedding;
     private final QueryComposer queryComposer;
     private final StudentProfileService studentProfileService;
+    private final ProfileValueNormalizer profileValueNormalizer;
+    private final PendingValidationState pendingValidationState;
+    private final PendingAnswerResolver pendingAnswerResolver;
     private final RetrievalQueryReformulator retrievalQueryReformulator;
     private final ValidationEngine validationEngine;
     private final ScholarshipRetrieval scholarshipRetrieval;
@@ -67,6 +78,9 @@ public class ChatOrchestrator {
             QueryComposer queryComposer,
             RetrievalQueryReformulator retrievalQueryReformulator,
             StudentProfileService studentProfileService,
+            ProfileValueNormalizer profileValueNormalizer,
+            PendingValidationState pendingValidationState,
+            PendingAnswerResolver pendingAnswerResolver,
             ValidationEngine validationEngine,
             ScholarshipRetrieval scholarshipRetrieval,
             ScholarshipAnswerGenerator scholarshipAnswerGenerator
@@ -82,6 +96,9 @@ public class ChatOrchestrator {
         this.queryComposer = queryComposer;
         this.retrievalQueryReformulator = retrievalQueryReformulator;
         this.studentProfileService = studentProfileService;
+        this.profileValueNormalizer = profileValueNormalizer;
+        this.pendingValidationState = pendingValidationState;
+        this.pendingAnswerResolver = pendingAnswerResolver;
         this.validationEngine = validationEngine;
         this.scholarshipRetrieval = scholarshipRetrieval;
         this.scholarshipAnswerGenerator = scholarshipAnswerGenerator;
@@ -105,9 +122,23 @@ public class ChatOrchestrator {
 
         log.info("Processed query {}", enrichedQuery);
 
-        // Intent classification
+        // Intent classification. History is passed so a reply that continues an
+        // ongoing scholarship/eligibility exchange (e.g. answering a profile
+        // question) is recognised as SCHOLARSHIP instead of falling to UNKNOWN.
         IntentResponse intentResponse =
-                intentClassification.classify(enrichedQuery);
+                intentClassification.classify(
+                        enrichedQuery,
+                        recentConversationMessages);
+
+        // Deterministic fallback: after the assistant asked a question in the
+        // previous turn (for example a validation question), the next user
+        // message is very likely an answer to it. Route it through the
+        // scholarship flow so the composer can extract the profile values.
+        if (intentResponse.getType() == IntentType.UNKNOWN
+                && isAnswerToAssistantsQuestion(recentConversationMessages)) {
+            log.info("Routing UNKNOWN query to SCHOLARSHIP flow: previous assistant turn was a question");
+            intentResponse = IntentResponse.forType(IntentType.SCHOLARSHIP);
+        }
 
         log.info("Intent type {}",intentResponse.getType());
 
@@ -151,21 +182,30 @@ public class ChatOrchestrator {
                                 .getOrCreate(chatRequest.getConversationId());
 
                 //Apply the profile values extracted by the composer, correcting
-                //existing fields only when the extracted value differs
+                //existing fields only when the extracted value differs. Rule-based
+                //fallbacks backfill a category the LLM may have missed from the
+                //student's own words, so the field never gets stuck re-asking.
                 profile = studentProfileService.applyExtracted(
                         chatRequest.getConversationId(),
-                        composerResult.getExtractedValues()
+                        withDeterministicFallbacks(
+                                chatRequest.getConversationId(),
+                                cleanedQuery,
+                                composerResult)
                 );
 
                 // Validate the profile against the target scheme (or discovery
                 // mode when no scheme was named). Ask for missing information;
                 // only when every required field is present do we proceed to
-                // retrieval/answer.
+                // retrieval/answer. When the student's own turn is an
+                // informational question ("what is a social category?") the
+                // questions are suppressed and the query is answered instead.
+                boolean asQuestion = isInformationalQuestion(cleanedQuery);
                 ValidationResult validationResult =
                         validationEngine.validateAll(
                                 profile,
                                 composerResult.getTargetSchemes(),
-                                chatRequest.getConversationId()
+                                chatRequest.getConversationId(),
+                                asQuestion
                         );
 
                 log.info("Validation status {} mode {} target schemes {}",
@@ -326,6 +366,93 @@ public class ChatOrchestrator {
         }
 
         return answer.toString();
+    }
+
+    static boolean isAnswerToAssistantsQuestion(List<ChatMessage> recentConversationMessages) {
+        if (recentConversationMessages == null || recentConversationMessages.isEmpty()) {
+            return false;
+        }
+        ChatMessage last = recentConversationMessages.get(recentConversationMessages.size() - 1);
+        return last.getRole() == MessageRole.ASSISTANT
+                && last.getContent() != null
+                && last.getContent().trim().endsWith("?");
+    }
+
+    /** Tokens that mark the student's turn as a knowledge question, not an answer. */
+    private static final java.util.Set<String> QUESTION_TOKENS = java.util.Set.of(
+            "what", "why", "how", "which", "when", "who", "where", "whose",
+            "explain", "define", "definition", "meaning");
+
+    /**
+     * True when the student is asking for information rather than answering a
+     * question. Such a turn must be answered from the knowledge base, not turned
+     * into another profile question.
+     */
+    static boolean isInformationalQuestion(String cleanedQuery) {
+        if (cleanedQuery == null || cleanedQuery.isBlank()) {
+            return false;
+        }
+        String query = cleanedQuery.toLowerCase(java.util.Locale.ROOT).trim();
+        if (query.endsWith("?")) {
+            return true;
+        }
+        if (query.startsWith("tell me") || query.contains("tell me about")) {
+            return true;
+        }
+        String normalized = query.replaceAll("[^a-z0-9]+", " ").trim();
+        if (normalized.isEmpty()) {
+            return false;
+        }
+        for (String token : normalized.split(" +")) {
+            if (QUESTION_TOKENS.contains(token)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Hybrid safety net over the LLM's extracted values. Two deterministic
+     * layers run: first a per-field detector for values the model missed
+     * entirely, then a pending-answer resolver that maps a plain reply onto the
+     * field the assistant just asked about. Only absent fields are filled; the
+     * model's output is never overridden.
+     */
+    private Map<String, Object> withDeterministicFallbacks(
+            String conversationId,
+            String userQuery,
+            QueryComposerResult composerResult) {
+
+        Map<String, Object> merged = new LinkedHashMap<>();
+        if (composerResult.getExtractedValues() != null) {
+            merged.putAll(composerResult.getExtractedValues());
+        }
+        if (isAbsent(merged.get("SOCIAL_CATEGORY"))) {
+            profileValueNormalizer.detectSocialCategory(userQuery)
+                    .ifPresent(category -> merged.put("SOCIAL_CATEGORY", category));
+        }
+        if (isAbsent(merged.get("COURSE"))) {
+            profileValueNormalizer.detectCourse(userQuery)
+                    .ifPresent(course -> merged.put("COURSE", course));
+        }
+
+        // When no new scheme was named this turn, the student is likely
+        // answering the question just asked. Resolve the reply onto the asked
+        // field so a valid answer is never dropped and re-asked.
+        boolean continuingExchange = composerResult.getTargetSchemes() == null
+                || composerResult.getTargetSchemes().isEmpty();
+        if (continuingExchange) {
+            List<StudentProfileField> asked = pendingValidationState.askedFields(conversationId);
+            if (!asked.isEmpty()) {
+                pendingAnswerResolver.resolve(asked, userQuery, merged.keySet())
+                        .forEach(merged::putIfAbsent);
+            }
+        }
+        return merged;
+    }
+
+    private static boolean isAbsent(Object value) {
+        return value == null || (value instanceof CharSequence text && text.toString().isBlank());
     }
 
     private String buildPrompt(String query, List<ChatMessage> recentConversationMessages) {

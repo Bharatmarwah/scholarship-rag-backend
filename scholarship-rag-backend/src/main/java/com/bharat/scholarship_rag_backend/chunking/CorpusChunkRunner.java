@@ -48,8 +48,8 @@ public class CorpusChunkRunner implements ApplicationRunner {
 
     public CorpusChunkRunner(
             CorpusChunker corpusChunker,
-            @Value("${chunking.output:target/chunk-review.txt}") String output,
-            @Value("${chunking.marker:target/.corpus-chunked}") String marker,
+            @Value("${chunking.output:.chunking/chunk-review.txt}") String output,
+            @Value("${chunking.marker:.chunking/.corpus-chunked}") String marker,
             @Value("${chunking.force:false}") boolean force) {
         this.corpusChunker = corpusChunker;
         this.output = output;

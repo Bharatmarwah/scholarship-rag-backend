@@ -18,7 +18,8 @@ import com.bharat.scholarship_rag_backend.chunking.MarkdownStructureParser.Block
  * row ({@code …Under} / {@code 14} / {@code Pradesh Graduate}) without the
  * chunker having to guess where the break belongs.
  */
-final class ChunkPacker {
+final class
+ChunkPacker {
 
     /** Comfortable size. Chunks land near this unless structure forces otherwise. */
     private static final int TARGET_TOKENS = 500;

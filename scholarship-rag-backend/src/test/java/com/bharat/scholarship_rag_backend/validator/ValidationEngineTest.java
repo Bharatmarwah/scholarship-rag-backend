@@ -604,4 +604,81 @@ class ValidationEngineTest {
             }
         }
     }
+
+    // Rephrase when the identical fields are asked in two consecutive turns
+    @Test
+    void rephrasesWhenSameFieldsAreAskedAgain() {
+        StudentProfileDto profile = pmUspComplete();
+        profile.setClass12Percentile(null);
+        profile.setInstitutionName(null);
+
+        ValidationResult first = engine.validate(profile, "PM-USP", "c-repeat");
+        assertTrue(first.getQuestion().contains("Could you please tell me"));
+
+        // The answering turn does not re-name the scheme, so the pending
+        // checklist continues and the same fields are still missing.
+        ValidationResult second = engine.validate(profile, null, "c-repeat");
+
+        assertEquals(ValidationStatus.MISSING_INFORMATION, second.getStatus());
+        assertEquals(first.getMissingFields(), second.getMissingFields());
+        assertTrue(second.getQuestion().contains("I still need"));
+    }
+
+    // No rephrase when the missing set actually changed between turns
+    @Test
+    void doesNotRephraseWhenTheAskedFieldsChange() {
+        StudentProfileDto profile = pmUspComplete();
+        profile.setClass12Percentile(null);
+        profile.setInstitutionName(null);
+
+        engine.validate(profile, "PM-USP", "c-change");
+        profile.setClass12Percentile(88.0);
+
+        ValidationResult second = engine.validate(profile, null, "c-change");
+
+        assertEquals(List.of(StudentProfileField.INSTITUTION_NAME), second.getMissingFields());
+        assertTrue(second.getQuestion().contains("Could you please tell me"));
+    }
+
+    // Education level routing recognises common phrasings, not just a few tokens
+    @Test
+    void educationLevelRoutingCoversCommonPhrasings() {
+        assertTrue(ValidationEngine.isCollegeLevel("college"));
+        assertTrue(ValidationEngine.isCollegeLevel("University"));
+        assertTrue(ValidationEngine.isCollegeLevel("undergraduate"));
+        assertTrue(ValidationEngine.isCollegeLevel("UG"));
+        assertTrue(ValidationEngine.isCollegeLevel("B.Tech"));
+        assertTrue(ValidationEngine.isCollegeLevel("BSc"));
+
+        assertTrue(ValidationEngine.isSchoolLevel("intermediate"));
+        assertTrue(ValidationEngine.isSchoolLevel("plus two"));
+        assertTrue(ValidationEngine.isSchoolLevel("CLASS_12"));
+        assertTrue(ValidationEngine.isSchoolLevel("12 standard"));
+        assertTrue(ValidationEngine.isSchoolLevel("HSC"));
+        assertTrue(ValidationEngine.isSchoolLevel("matric"));
+
+        assertFalse(ValidationEngine.isCollegeLevel("intermediate"));
+        assertFalse(ValidationEngine.isCollegeLevel("CLASS_12"));
+        assertFalse(ValidationEngine.isSchoolLevel("UG"));
+        assertFalse(ValidationEngine.isSchoolLevel("college"));
+    }
+
+    // An informational question must be answerable, not turned into a profile
+    // question: missing-field questions are suppressed and the result is READY.
+    @Test
+    void informationalQuestionSuppressesMissingFieldQuestions() {
+        StudentProfileDto profile = StudentProfileDto.builder().build();
+
+        ValidationResult asked = engine.validateAll(profile, List.of(), "c-q");
+        assertEquals(ValidationStatus.MISSING_INFORMATION, asked.getStatus());
+
+        ValidationResult answered = engine.validateAll(profile, List.of(), "c-q", true);
+        assertEquals(ValidationStatus.READY, answered.getStatus());
+        assertTrue(answered.getMissingFields().isEmpty());
+        assertNull(answered.getQuestion());
+
+        // Pending validation is preserved, so profile collection resumes.
+        ValidationResult resumed = engine.validateAll(profile, List.of(), "c-q", false);
+        assertEquals(ValidationStatus.MISSING_INFORMATION, resumed.getStatus());
+    }
 }

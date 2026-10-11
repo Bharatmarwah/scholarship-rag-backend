@@ -70,4 +70,23 @@ public class QuestionBuilder {
                 + String.join(", ", fragments.subList(0, fragments.size() - 1))
                 + ", and " + fragments.get(fragments.size() - 1) + "?";
     }
+
+    /**
+     * Used when the exact same fields were already asked in the previous turn
+     * and the value still could not be captured. Asks the same detail but
+     * nudges the student towards a parseable answer instead of repeating the
+     * identical question forever.
+     */
+    public String buildRephrase(List<StudentProfileField> missingFields) {
+        if (missingFields == null || missingFields.isEmpty()) {
+            return null;
+        }
+        String summary = missingFields.stream()
+                .map(field -> FRAGMENTS.getOrDefault(field,
+                        "a detail the scheme needs (" + field + ")"))
+                .collect(Collectors.joining(", "));
+        return "I still need " + summary
+                + ". Please reply with just the value, for example a number "
+                + "like 3 for a year or class, or 400000 for an income amount.";
+    }
 }

@@ -1,6 +1,7 @@
 package com.bharat.scholarship_rag_backend.extraction;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,15 +12,21 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
+
 /**
- * Second pipeline stage. Cleans the raw extracted .txt files into clean,
- * structured Markdown, mirroring the source tree under the cleaned-markdown
- * directory, ready for later section-aware chunking.
+ * Single-step ingestion pipeline: converts every scholarship PDF directly into
+ * clean, structured Markdown, mirroring the source tree under the
+ * cleaned-markdown directory, ready for section-aware chunking.
  *
- * <p>Source: {@code src/main/resources/extracted-text/**&#47;*.txt}
+ * <p>Source: {@code src/main/resources/scholarships/**&#47;*.pdf}
  * <br>Output: mirrors the source tree under {@code src/main/resources/cleaned-markdown/}
  *
- * <p>Cleaning is deliberately conservative. It removes ONLY clear
+ * <p>Extraction and cleaning happen in memory in one pass; no intermediate
+ * {@code .txt} files are written. Raw text is pulled page by page with page
+ * markers, then cleaned conservatively. Cleaning removes ONLY clear
  * extraction/formatting noise and NEVER changes or drops meaningful content:
  * <ul>
  *   <li>blank lines and runs of blank lines,</li>
@@ -41,16 +48,16 @@ import java.util.stream.Stream;
  *       never merged.</li>
  * </ul>
  *
- * <p>The {@code --- Page N ---} markers added by the extractor are kept
+ * <p>The {@code --- Page N ---} markers added during extraction are kept
  * verbatim (each as its own Markdown paragraph) so page boundaries remain
  * traceable.
  */
-public final class ScholarshipTextCleaner {
+public final class PdfToMarkdown {
 
     private static final String RESOURCES_DIR = "src/main/resources";
-    private static final String INPUT_DIR = RESOURCES_DIR + "/extracted-text";
+    private static final String SOURCE_DIR = RESOURCES_DIR + "/scholarships";
     private static final String OUTPUT_DIR = RESOURCES_DIR + "/cleaned-markdown";
-    private static final String TEXT_EXTENSION = ".txt";
+    private static final String PDF_EXTENSION = ".pdf";
     private static final String MARKDOWN_EXTENSION = ".md";
 
     /** Page markers added by the extractor, e.g. {@code --- Page 7 ---}. */
@@ -114,25 +121,23 @@ public final class ScholarshipTextCleaner {
     }
 
     public static void main(String[] args) throws IOException {
-        List<Path> outputs = cleanAll();
+        List<Path> outputs = convertAll();
 
-        System.out.println("Cleaned " + outputs.size() + " file(s):");
+        System.out.println("Converted " + outputs.size() + " PDF(s) to Markdown:");
         outputs.forEach(path -> System.out.println("  " + path));
     }
 
     /**
-     * Cleans every .txt file in the extracted-text directory into clean
-     * Markdown under the cleaned-markdown directory. Returns the list of
-     * written files.
+     * Converts every scholarship PDF directly into clean Markdown under the
+     * cleaned-markdown directory. Returns the list of written files.
      */
-    public static List<Path> cleanAll() throws IOException {
+    public static List<Path> convertAll() throws IOException {
         List<Path> outputs = new ArrayList<>();
 
-        for (Path source : findSourceFiles()) {
+        for (Path source : findSourcePdfs()) {
             Path output = outputPathFor(source);
 
-            String raw = Files.readString(source, StandardCharsets.UTF_8);
-            String cleaned = cleanText(raw);
+            String cleaned = pdfToMarkdown(source);
 
             Files.createDirectories(output.getParent());
             Files.writeString(output, cleaned, StandardCharsets.UTF_8);
@@ -141,6 +146,38 @@ public final class ScholarshipTextCleaner {
         }
 
         return outputs;
+    }
+
+    /** Extracts a PDF page by page (tagging pages) and cleans it to Markdown. */
+    public static String pdfToMarkdown(Path pdfPath) throws IOException {
+        return cleanText(extractWithPageMarkers(pdfPath));
+    }
+
+    /** Extracts a PDF's text page by page, tagging each page: {@code --- Page N ---}. */
+    public static String extractWithPageMarkers(Path pdfPath) throws IOException {
+        try (InputStream inputStream = Files.newInputStream(pdfPath)) {
+            try (PDDocument document = loadDocument(inputStream)) {
+                PDFTextStripper stripper = new PDFTextStripper();
+                stripper.setSortByPosition(true);
+
+                StringBuilder result = new StringBuilder();
+                int totalPages = document.getNumberOfPages();
+
+                for (int page = 1; page <= totalPages; page++) {
+                    stripper.setStartPage(page);
+                    stripper.setEndPage(page);
+                    result.append("--- Page ").append(page).append(" ---\n");
+                    result.append(stripper.getText(document));
+                    result.append("\n");
+                }
+
+                return result.toString();
+            }
+        }
+    }
+
+    private static PDDocument loadDocument(InputStream inputStream) throws IOException {
+        return Loader.loadPDF(inputStream.readAllBytes());
     }
 
     /**
@@ -488,47 +525,47 @@ public final class ScholarshipTextCleaner {
         return String.join("\n\n", blocks) + "\n";
     }
 
-    /** Locates the extracted-text directory from the current working directory. */
-    private static List<Path> findSourceFiles() throws IOException {
-        Path inputRoot = resolveInputRoot();
-        if (!Files.isDirectory(inputRoot)) {
-            throw new IOException("Extracted-text directory not found: " + inputRoot.toAbsolutePath());
+    /** Locates the scholarships directory from the current working directory. */
+    private static List<Path> findSourcePdfs() throws IOException {
+        Path sourceRoot = resolveSourceRoot();
+        if (!Files.isDirectory(sourceRoot)) {
+            throw new IOException("Scholarships directory not found: " + sourceRoot.toAbsolutePath());
         }
 
-        try (Stream<Path> stream = Files.walk(inputRoot)) {
+        try (Stream<Path> stream = Files.walk(sourceRoot)) {
             return stream
                     .filter(Files::isRegularFile)
-                    .filter(path -> path.toString().toLowerCase().endsWith(TEXT_EXTENSION))
+                    .filter(path -> path.toString().toLowerCase().endsWith(PDF_EXTENSION))
                     .sorted(Comparator.comparing(Path::toString))
                     .toList();
         }
     }
 
     /**
-     * Resolves src/main/resources/extracted-text regardless of whether the
+     * Resolves src/main/resources/scholarships regardless of whether the
      * app is started from the repo root or from the module directory.
      */
-    private static Path resolveInputRoot() {
+    private static Path resolveSourceRoot() {
         Path workingDir = Path.of("").toAbsolutePath();
         List<Path> candidates = List.of(
-                workingDir.resolve(INPUT_DIR),
-                workingDir.resolve("scholarship-rag-backend/" + INPUT_DIR)
+                workingDir.resolve(SOURCE_DIR),
+                workingDir.resolve("scholarship-rag-backend/" + SOURCE_DIR)
         );
 
         return candidates.stream()
                 .filter(Files::isDirectory)
                 .findFirst()
-                .orElse(workingDir.resolve(INPUT_DIR));
+                .orElse(workingDir.resolve(SOURCE_DIR));
     }
 
-    /** Maps a source extracted file to its mirrored cleaned Markdown output path. */
-    private static Path outputPathFor(Path sourcePath) {
-        Path inputRoot = resolveInputRoot();
-        Path relative = inputRoot.relativize(sourcePath.toAbsolutePath());
+    /** Maps a source PDF to its mirrored cleaned Markdown output path. */
+    private static Path outputPathFor(Path pdfPath) {
+        Path sourceRoot = resolveSourceRoot();
+        Path relative = sourceRoot.relativize(pdfPath.toAbsolutePath());
 
         String relativeStr = relative.toString();
-        if (relativeStr.toLowerCase().endsWith(TEXT_EXTENSION)) {
-            relativeStr = relativeStr.substring(0, relativeStr.length() - TEXT_EXTENSION.length())
+        if (relativeStr.toLowerCase().endsWith(PDF_EXTENSION)) {
+            relativeStr = relativeStr.substring(0, relativeStr.length() - PDF_EXTENSION.length())
                     + MARKDOWN_EXTENSION;
         }
 

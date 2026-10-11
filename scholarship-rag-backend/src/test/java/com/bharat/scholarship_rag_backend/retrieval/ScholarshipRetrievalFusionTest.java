@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 class ScholarshipRetrievalFusionTest {
 
     private final ScholarshipRetrieval retrieval =
-            new ScholarshipRetrieval(null, null, 8);
+            new ScholarshipRetrieval(null, null, 8, 0.8);
 
     private static final UUID A = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
     private static final UUID B = UUID.fromString("00000000-0000-0000-0000-0000000000b2");
@@ -183,6 +183,13 @@ class ScholarshipRetrievalFusionTest {
         assertNull(fused.get(0).keywordRank());
         assertEquals(1.0 / 61 + 1.0 / 61, fused.get(0).score(), 1e-9,
                 "both arms contribute even though the chunk is returned once");
+    }
+
+    @Test
+    void clampsMaxDistanceToTheCosineRange() {
+        assertEquals(2.0, ScholarshipRetrieval.clampDistance(5), 1e-12);
+        assertEquals(0.0, ScholarshipRetrieval.clampDistance(-1), 1e-12);
+        assertEquals(1.2, ScholarshipRetrieval.clampDistance(1.2), 1e-12);
     }
 
     @Test

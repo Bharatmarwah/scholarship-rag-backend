@@ -1,6 +1,7 @@
 package com.bharat.scholarship_rag_backend.retrieval;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,8 +48,18 @@ public class ScholarshipRetrieval {
     /** Constant that damps the top of each ranking in RRF. */
     private static final int RRF_K = 60;
 
-    /** Cosine distance cut-off. 1.2 accepts every direction. */
-    private static final double MAX_DISTANCE = 1.2;
+    /**
+     * Cosine distance is {@code 1 - cosine_similarity}, so it runs {@code 0.0}
+     * (identical direction, most similar) to {@code 2.0} (opposite direction,
+     * least similar). The default cutoff is {@code 1.0} (similarity
+     * {@code >= 0.0}): it keeps every non-negatively-correlated passage while
+     * discarding opposite vectors, because relevant chunks commonly sit around
+     * {@code 0.7-0.9} and the stricter {@code 0.8} cutoff was trimming them.
+     * {@code 2.0} is kept as the upper clamp bound and means "gate off", where
+     * the most-similar rows still win through {@code ORDER BY distance} +
+     * {@code LIMIT}.
+     */
+    private static final double MAX_COSINE_DISTANCE = 2.0;
 
     /**
      * Normative text outranks a restatement of it. Applied after fusion so it
@@ -63,14 +74,26 @@ public class ScholarshipRetrieval {
     private final ScholarshipChunkRepo chunkRepo;
     private final QueryEmbedding queryEmbedding;
     private final int topK;
+    private final double maxDistance;
 
     public ScholarshipRetrieval(
             ScholarshipChunkRepo chunkRepo,
             QueryEmbedding queryEmbedding,
-            @Value("${retrieval.top-k:8}") int topK) {
+            @Value("${retrieval.top-k:8}") int topK,
+            @Value("${retrieval.max-distance:1.0}") double maxDistance) {
         this.chunkRepo = chunkRepo;
         this.queryEmbedding = queryEmbedding;
         this.topK = topK;
+        this.maxDistance = clampDistance(maxDistance);
+    }
+
+    /**
+     * Restricts the cutoff to the cosine-distance range {@code [0, 2]}. A value
+     * outside it is a misconfiguration and is clamped rather than trusted, so
+     * the SQL filter keeps its intended meaning.
+     */
+    static double clampDistance(double value) {
+        return Math.max(0.0, Math.min(MAX_COSINE_DISTANCE, value));
     }
 
     /**
@@ -98,6 +121,8 @@ public class ScholarshipRetrieval {
         List<Object[]> vectorRows = runVectorArm(query, schemeArray, scoped, candidateDepth);
         List<Object[]> keywordRows = runKeywordArm(query, schemeArray, scoped, candidateDepth);
 
+        logVectorDistances(vectorRows);
+
         if (vectorRows.isEmpty() && keywordRows.isEmpty()) {
             return List.of();
         }
@@ -114,11 +139,49 @@ public class ScholarshipRetrieval {
             if (literal == null) {
                 return List.of();
             }
-            return chunkRepo.searchByVector(literal, schemeArray, scoped, MAX_DISTANCE, limit);
+            return chunkRepo.searchByVector(literal, schemeArray, scoped, maxDistance, limit);
         } catch (RuntimeException e) {
             log.warn("Vector arm of scholarship retrieval failed, falling back to full text", e);
             return List.of();
         }
+    }
+
+    /**
+     * Reports where the retrieved passages actually sit on the cosine-distance
+     * scale ({@code 0 = identical, 2 = opposite}), so the cutoff can be
+     * calibrated from data instead of guessed. No log line is emitted when the
+     * vector arm returned nothing.
+     */
+    private void logVectorDistances(List<Object[]> vectorRows) {
+        if (vectorRows.isEmpty()) {
+            return;
+        }
+
+        double[] distances = new double[vectorRows.size()];
+        int n = 0;
+        for (Object[] row : vectorRows) {
+            Double distance = asDouble(row.length > 11 ? row[11] : null);
+            if (distance != null) {
+                distances[n++] = distance;
+            }
+        }
+        if (n == 0) {
+            return;
+        }
+        Arrays.sort(distances, 0, n);
+        double p50 = distances[percentileIndex(n, 50)];
+        double p90 = distances[percentileIndex(n, 90)];
+        double p99 = distances[percentileIndex(n, 99)];
+        double furthest = distances[n - 1];
+
+        log.info(String.format(Locale.ROOT,
+                "Vector-arm cosine distances: n=%d p50=%.2f p90=%.2f p99=%.2f furthest=%.2f cutoff=%.2f",
+                n, p50, p90, p99, furthest, maxDistance));
+    }
+
+    private static int percentileIndex(int size, int percentile) {
+        return Math.max(0, Math.min(size - 1,
+                (int) Math.ceil(percentile / 100.0 * size) - 1));
     }
 
     private List<Object[]> runKeywordArm(String query, String schemeArray, boolean scoped, int limit) {

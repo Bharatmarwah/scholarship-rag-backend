@@ -4,10 +4,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.serializer.GenericJacksonJsonRedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
-
-import tools.jackson.databind.json.JsonMapper;
 
 @Configuration
 public class RedisConfig {
@@ -20,16 +17,16 @@ public class RedisConfig {
 
         template.setConnectionFactory(redisConnectionFactory);
 
-        JsonMapper mapper = JsonMapper.builder()
-                .findAndAddModules()
-                .build();
-
         template.setKeySerializer(
                 new StringRedisSerializer()
         );
 
+        // Conversation messages are stored as explicit JSON strings (see
+        // ConversationMemory). A type-tagging serializer is deliberately
+        // avoided: with a custom mapper it produced type-less JSON that came
+        // back as LinkedHashMap instead of ChatMessage.
         template.setValueSerializer(
-                new GenericJacksonJsonRedisSerializer(mapper)
+                new StringRedisSerializer()
         );
 
         template.afterPropertiesSet();

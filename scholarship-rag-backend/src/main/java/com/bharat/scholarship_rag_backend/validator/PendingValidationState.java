@@ -26,15 +26,32 @@ public class PendingValidationState {
         store(conversationId, targetScheme == null ? List.of() : List.of(targetScheme), askedFields);
     }
 
+    /**
+     * Remembers the fields last asked in this conversation. The target scheme
+     * list may be empty for discovery, where there is no scheme to continue but
+     * the asked fields are still needed to detect a repeated question and to
+     * resolve a plain answer back onto the right field.
+     */
     public void store(String conversationId, List<SchemeType> targetSchemes, List<StudentProfileField> askedFields) {
-        if (conversationId == null || targetSchemes == null || targetSchemes.isEmpty()) {
+        if (conversationId == null) {
             return;
         }
-        pendingByConversation.put(conversationId, new Pending(List.copyOf(targetSchemes), askedFields));
+        List<SchemeType> schemes = targetSchemes == null ? List.of() : List.copyOf(targetSchemes);
+        List<StudentProfileField> fields = askedFields == null ? List.of() : List.copyOf(askedFields);
+        pendingByConversation.put(conversationId, new Pending(schemes, fields));
     }
 
+    /**
+     * True only when a specific or multi-scheme intent is in progress. A
+     * discovery-only pending entry carries no scheme and must not be treated as
+     * a continuation, so the discovery path keeps running.
+     */
     public boolean hasPending(String conversationId) {
-        return conversationId != null && pendingByConversation.containsKey(conversationId);
+        if (conversationId == null) {
+            return false;
+        }
+        Pending pending = pendingByConversation.get(conversationId);
+        return pending != null && !pending.targetSchemes().isEmpty();
     }
 
     /**

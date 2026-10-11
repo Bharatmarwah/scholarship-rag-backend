@@ -37,8 +37,8 @@ public interface ScholarshipChunkRepo extends JpaRepository<ScholarshipChunk, UU
      * @param schemes        pgvector-style array literal of scheme names, may be
      *                       empty when {@code scoped} is false
      * @param scoped         whether {@code schemes} should filter results
-     * @param maxDistance    cosine distance cut-off; 1.2 accepts everything,
-     *                       lower values are stricter
+     * @param maxDistance    cosine distance cut-off in {@code [0, 2]}; 2.0 keeps
+     *                       every row (gate off), lower values are stricter
      * @param topK           maximum rows returned
      */
     @Query(value = """

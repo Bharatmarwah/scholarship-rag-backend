@@ -93,13 +93,29 @@ public class ValidationEngine {
             StudentProfileDto profile,
             List<String> rawTargetSchemes,
             String conversationId) {
-        return validateForSchemes(profile, rawTargetSchemes, conversationId);
+        return validateForSchemes(profile, rawTargetSchemes, conversationId, false);
+    }
+
+    /**
+     * As {@link #validateAll}, but when the student's own turn is an
+     * informational question ("what is a social category?") the missing-field
+     * questions are suppressed: the result is always READY so the question is
+     * answered from the knowledge base. Pending validation is left untouched, so
+     * profile collection resumes on the student's next real answer.
+     */
+    public ValidationResult validateAll(
+            StudentProfileDto profile,
+            List<String> rawTargetSchemes,
+            String conversationId,
+            boolean asQuestion) {
+        return validateForSchemes(profile, rawTargetSchemes, conversationId, asQuestion);
     }
 
     private ValidationResult validateForSchemes(
             StudentProfileDto profile,
             List<String> rawTargetSchemes,
-            String conversationId) {
+            String conversationId,
+            boolean asQuestion) {
 
         List<SchemeType> namedSchemes =
                 resolveNamedSchemes(rawTargetSchemes);
@@ -136,9 +152,9 @@ public class ValidationEngine {
         }
 
         return switch (mode) {
-            case SPECIFIC_SCHEME -> validateSpecific(profile, targetScheme, conversationId);
-            case MULTI_SCHEME -> validateMultiScheme(profile, activeSchemes, conversationId);
-            case SCHOLARSHIP_DISCOVERY -> validateDiscovery(profile, conversationId);
+            case SPECIFIC_SCHEME -> validateSpecific(profile, targetScheme, conversationId, asQuestion);
+            case MULTI_SCHEME -> validateMultiScheme(profile, activeSchemes, conversationId, asQuestion);
+            case SCHOLARSHIP_DISCOVERY -> validateDiscovery(profile, conversationId, asQuestion);
         };
     }
 
@@ -180,10 +196,11 @@ public class ValidationEngine {
     private ValidationResult validateMultiScheme(
             StudentProfileDto profile,
             List<SchemeType> namedSchemes,
-            String conversationId) {
+            String conversationId,
+            boolean asQuestion) {
 
         if (namedSchemes == null || namedSchemes.isEmpty()) {
-            return validateDiscovery(profile, conversationId);
+            return validateDiscovery(profile, conversationId, asQuestion);
         }
 
         List<SchemeType> schemes = List.copyOf(namedSchemes);
@@ -195,17 +212,21 @@ public class ValidationEngine {
             pendingState.clear(conversationId);
             return ValidationResult.ready(ValidationMode.MULTI_SCHEME, null, schemes);
         }
+        if (asQuestion) {
+            return ValidationResult.ready(ValidationMode.MULTI_SCHEME, null, schemes);
+        }
 
         List<StudentProfileField> asked = missing.subList(
                 0, Math.min(missing.size(), MAX_FIELDS_PER_TURN));
 
+        String question = turnQuestion(asked, conversationId);
         pendingState.store(conversationId, schemes, List.copyOf(asked));
         return ValidationResult.missing(
                 ValidationMode.MULTI_SCHEME,
                 null,
                 schemes,
                 asked,
-                questionBuilder.buildQuestion(asked),
+                question,
                 "These details are needed to compare " + schemeNames(schemes) + ".");
     }
 
@@ -277,13 +298,14 @@ public class ValidationEngine {
     private ValidationResult validateSpecific(
             StudentProfileDto profile,
             SchemeType targetScheme,
-            String conversationId) {
+            String conversationId,
+            boolean asQuestion) {
 
         if (targetScheme == null) {
             // No single scheme is in progress, so there is no checklist to
             // complete. Falling through avoids asking questions of an unknown
             // scheme definition.
-            return validateDiscovery(profile, conversationId);
+            return validateDiscovery(profile, conversationId, asQuestion);
         }
 
         SchemeDefinition definition = schemeRegistry.definition(targetScheme);
@@ -298,20 +320,28 @@ public class ValidationEngine {
                     targetScheme,
                     List.of(targetScheme));
         }
+        if (asQuestion) {
+            return ValidationResult.ready(
+                    ValidationMode.SPECIFIC_SCHEME,
+                    targetScheme,
+                    List.of(targetScheme));
+        }
 
+        String question = turnQuestion(missing, conversationId);
         pendingState.store(conversationId, targetScheme, missing);
         return ValidationResult.missing(
                 ValidationMode.SPECIFIC_SCHEME,
                 targetScheme,
                 List.of(targetScheme),
                 missing,
-                questionBuilder.buildQuestion(missing),
+                question,
                 "These fields are required before " + targetScheme + " can be evaluated.");
     }
 
     private ValidationResult validateDiscovery(
             StudentProfileDto profile,
-            String conversationId) {
+            String conversationId,
+            boolean asQuestion) {
 
         List<SchemeType> allSchemes = schemeRegistry.allSchemes();
         Optional<StudentProfileField> next = schemeRegistry.discoveryOrder().stream()
@@ -326,15 +356,39 @@ public class ValidationEngine {
                     null,
                     allSchemes);
         }
+        if (asQuestion) {
+            return ValidationResult.ready(
+                    ValidationMode.SCHOLARSHIP_DISCOVERY,
+                    null,
+                    allSchemes);
+        }
 
         List<StudentProfileField> missing = List.of(next.get());
+        String question = turnQuestion(missing, conversationId);
+        // Discovery has no scheme to continue, but the asked field is recorded
+        // so a repeated question is rephrased and a plain reply can be resolved
+        // back onto the field that was asked.
+        pendingState.store(conversationId, List.of(), missing);
         return ValidationResult.missing(
                 ValidationMode.SCHOLARSHIP_DISCOVERY,
                 null,
                 allSchemes,
                 missing,
-                questionBuilder.buildQuestion(missing),
+                question,
                 "This information helps determine which scholarships may suit you.");
+    }
+
+    /**
+     * If the same fields were already asked in the previous turn and the value
+     * still was not captured, rephrase the question so the student knows to
+     * reply with a plain value instead of seeing the identical question again.
+     */
+    private String turnQuestion(List<StudentProfileField> asked, String conversationId) {
+        List<StudentProfileField> lastAsked = pendingState.askedFields(conversationId);
+        if (!lastAsked.isEmpty() && lastAsked.equals(asked)) {
+            return questionBuilder.buildRephrase(asked);
+        }
+        return questionBuilder.buildQuestion(asked);
     }
 
     /**
@@ -366,10 +420,21 @@ public class ValidationEngine {
                 || level.contains("master")
                 || level.contains("b.tech")
                 || level.contains("m.tech")
+                || level.contains("btech")
+                || level.contains("mtech")
                 || level.contains("bba")
                 || level.contains("bca")
+                || level.contains("bsc")
+                || level.contains("msc")
+                || level.contains("bcom")
+                || level.contains("mcom")
                 || level.contains("degree")
                 || level.contains("diploma")
+                || level.contains("polytechnic")
+                || level.contains("college")
+                || level.contains("university")
+                || level.contains("doctorate")
+                || level.contains("phd")
                 || level.startsWith("b.")
                 || level.startsWith("m.");
     }
@@ -389,6 +454,13 @@ public class ValidationEngine {
                 || level.contains("ssc")
                 || level.contains("hsc")
                 || level.contains("matric")
-                || level.contains("std");
+                || level.contains("std")
+                || level.contains("standard")
+                || level.contains("intermediate")
+                || level.contains("plus two")
+                || level.contains("plus2")
+                || level.contains("puc")
+                || level.contains("+2")
+                || level.contains("+1");
     }
 }

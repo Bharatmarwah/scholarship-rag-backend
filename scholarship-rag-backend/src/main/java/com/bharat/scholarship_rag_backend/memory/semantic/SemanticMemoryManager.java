@@ -4,11 +4,13 @@ import com.bharat.scholarship_rag_backend.dto.request.MessageRole;
 import com.bharat.scholarship_rag_backend.entity.MemoryMessage;
 import com.bharat.scholarship_rag_backend.entity.SemanticMemory;
 import com.bharat.scholarship_rag_backend.repository.SemanticMemoryRepo;
+import com.bharat.scholarship_rag_backend.retrieval.PgVectorLiteral;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 @Component
@@ -50,8 +52,16 @@ public class SemanticMemoryManager {
 
     @Transactional
     public List<SemanticMemoryResponse> listAllSemanticMemories(String conversationId, float[] queryEmbedding) {
-        return semanticMemoryRepo
-                .findSimilarMemories(conversationId, queryEmbedding, topK);
+        String literal = PgVectorLiteral.vector(queryEmbedding);
+        List<Object[]> rows = semanticMemoryRepo.findSimilarMemories(conversationId, literal, topK);
+
+        List<SemanticMemoryResponse> results = new ArrayList<>(rows.size());
+        for (Object[] row : rows) {
+            String context = (String) row[0];
+            Double distance = row[1] == null ? null : ((Number) row[1]).doubleValue();
+            results.add(new SemanticMemoryResponse(context, distance));
+        }
+        return results;
     }
 
     private MemoryMessage buildMessage(MessageRole role, String context, float[] embeddings) {
