@@ -8,6 +8,9 @@ import com.bharat.scholarship_rag_backend.dto.request.ChatRequest;
 import com.bharat.scholarship_rag_backend.dto.request.MessageRole;
 import com.bharat.scholarship_rag_backend.dto.response.ChatResponse;
 import com.bharat.scholarship_rag_backend.embedding.QueryEmbedding;
+import com.bharat.scholarship_rag_backend.eligibility.EligibilityAnswerFormatter;
+import com.bharat.scholarship_rag_backend.eligibility.EligibilityEngine;
+import com.bharat.scholarship_rag_backend.eligibility.EligibilityReport;
 import com.bharat.scholarship_rag_backend.enrichment.QueryEnricher;
 import com.bharat.scholarship_rag_backend.enrichment.QueryGate;
 import com.bharat.scholarship_rag_backend.intent.IntentClassification;
@@ -24,6 +27,7 @@ import com.bharat.scholarship_rag_backend.retrieval.RetrievalQueryReformulator;
 import com.bharat.scholarship_rag_backend.retrieval.ScholarshipAnswerGenerator;
 import com.bharat.scholarship_rag_backend.retrieval.ScholarshipChunkMatch;
 import com.bharat.scholarship_rag_backend.retrieval.ScholarshipRetrieval;
+import com.bharat.scholarship_rag_backend.scheme.SchemeType;
 import com.bharat.scholarship_rag_backend.scheme.StudentProfileField;
 import com.bharat.scholarship_rag_backend.service.StudentProfileService;
 import com.bharat.scholarship_rag_backend.validator.PendingAnswerResolver;
@@ -65,6 +69,8 @@ public class ChatOrchestrator {
     private final ValidationEngine validationEngine;
     private final ScholarshipRetrieval scholarshipRetrieval;
     private final ScholarshipAnswerGenerator scholarshipAnswerGenerator;
+    private final EligibilityEngine eligibilityEngine;
+    private final EligibilityAnswerFormatter eligibilityAnswerFormatter;
 
     public ChatOrchestrator(
             OpenAiStreamingChatModel openAiStreamingChatModel,
@@ -83,7 +89,9 @@ public class ChatOrchestrator {
             PendingAnswerResolver pendingAnswerResolver,
             ValidationEngine validationEngine,
             ScholarshipRetrieval scholarshipRetrieval,
-            ScholarshipAnswerGenerator scholarshipAnswerGenerator
+            ScholarshipAnswerGenerator scholarshipAnswerGenerator,
+            EligibilityEngine eligibilityEngine,
+            EligibilityAnswerFormatter eligibilityAnswerFormatter
     ) {
         this.openAiStreamingChatModel = openAiStreamingChatModel;
         this.conversationMemory = conversationMemory;
@@ -102,6 +110,8 @@ public class ChatOrchestrator {
         this.validationEngine = validationEngine;
         this.scholarshipRetrieval = scholarshipRetrieval;
         this.scholarshipAnswerGenerator = scholarshipAnswerGenerator;
+        this.eligibilityEngine = eligibilityEngine;
+        this.eligibilityAnswerFormatter = eligibilityAnswerFormatter;
     }
 
     public ChatResponse processChat(ChatRequest chatRequest) {
@@ -226,38 +236,67 @@ public class ChatOrchestrator {
                             chatResponse
                     );
                 } else {
-                    // Reformulate Query through combinedQuery, semanticMemories....
-                    // and student profile to return the best possible
-                    // scholarship chunks. The resolved scheme travels with the
-                    // query so retrieval can filter on it.
-                    ReformulatedQuery reformulatedQuery =
-                            retrievalQueryReformulator.
-                                    reformulate(
-                                            composerResult.getCombinedQuery(),
-                                            semanticMemories,
-                                            profile,
-                                            validationResult
-                                    );
+                    // When a scheme (or discovery) produced a complete-enough
+                    // profile and the student is not just asking a knowledge
+                    // question, the deterministic eligibility engine decides:
+                    // match the collected profile against each scheme's target
+                    // criteria. Otherwise fall back to grounded retrieval.
+                    List<SchemeType> targetSchemes = validationResult.getTargetSchemes();
+                    boolean useEligibility = !asQuestion
+                            && targetSchemes != null
+                            && !targetSchemes.isEmpty();
 
-                    log.info("Reformulated query {} for schemes {}",
-                            reformulatedQuery.query(),
-                            reformulatedQuery.schemeNames());
+                    ChatResponse response;
+                    if (useEligibility) {
+                        EligibilityReport eligibilityReport =
+                                eligibilityEngine.assessAll(profile, targetSchemes);
+                        String answer = eligibilityAnswerFormatter.format(
+                                validationResult.getMode(), eligibilityReport);
 
-                    // Search the knowledge base. The resolved scheme list is a
-                    // hard filter so another scheme's rules can never be
-                    // presented as this scheme's answer.
-                    List<ScholarshipChunkMatch> matches =
-                            scholarshipRetrieval.search(
-                                    reformulatedQuery.query(),
-                                    reformulatedQuery.candidates());
+                        log.info("Eligibility verdicts {} for schemes {}",
+                                eligibilityReport.assessments().stream()
+                                        .map(a -> a.scheme() + "=" + a.verdict())
+                                        .toList(),
+                                targetSchemes);
 
-                    log.info("Retrieved {} chunks: {}", matches.size(),
-                            matches.stream().map(ScholarshipChunkMatch::citation).toList());
+                        response = new ChatResponse();
+                        response.setResponse(answer);
+                        response.setConversationMemorySummary(answer);
+                        response.setSemanticMemorySummary(null);
+                    } else {
+                        // Reformulate Query through combinedQuery, semanticMemories....
+                        // and student profile to return the best possible
+                        // scholarship chunks. The resolved scheme travels with the
+                        // query so retrieval can filter on it.
+                        ReformulatedQuery reformulatedQuery =
+                                retrievalQueryReformulator.
+                                        reformulate(
+                                                composerResult.getCombinedQuery(),
+                                                semanticMemories,
+                                                profile,
+                                                validationResult
+                                        );
 
-                    // Answer strictly from the retrieved chunks.
-                    ChatResponse response = scholarshipAnswerGenerator.answer(
-                            enrichedQuery,
-                            matches);
+                        log.info("Reformulated query {} for schemes {}",
+                                reformulatedQuery.query(),
+                                reformulatedQuery.schemeNames());
+
+                        // Search the knowledge base. The resolved scheme list is a
+                        // hard filter so another scheme's rules can never be
+                        // presented as this scheme's answer.
+                        List<ScholarshipChunkMatch> matches =
+                                scholarshipRetrieval.search(
+                                        reformulatedQuery.query(),
+                                        reformulatedQuery.candidates());
+
+                        log.info("Retrieved {} chunks: {}", matches.size(),
+                                matches.stream().map(ScholarshipChunkMatch::citation).toList());
+
+                        // Answer strictly from the retrieved chunks.
+                        response = scholarshipAnswerGenerator.answer(
+                                enrichedQuery,
+                                matches);
+                    }
 
                     // Save semantic memory for this exchange
                     try {
@@ -278,6 +317,8 @@ public class ChatOrchestrator {
                             conversationId,
                             response
                     );
+
+                    chatResponse = response;
                 }
             }
 
@@ -296,6 +337,11 @@ public class ChatOrchestrator {
                 chatResponse.setResponse(response);
                 chatResponse.setConversationMemorySummary(null);
                 chatResponse.setSemanticMemorySummary(null);
+
+                conversationMemoryManager.addAssistantMessage(
+                        conversationId,
+                        chatResponse
+                );
             }
 
             case UNKNOWN -> {

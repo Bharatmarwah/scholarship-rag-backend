@@ -23,7 +23,7 @@ public class MemoryMessage {
     @Column(nullable = false)
     private MessageRole messageRole;
 
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "text")
     private String context;
 
     @JdbcTypeCode(SqlTypes.VECTOR)
