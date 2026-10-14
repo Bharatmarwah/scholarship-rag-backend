@@ -38,7 +38,6 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -111,7 +110,7 @@ class ChatOrchestratorScholarshipResponseTest {
         StudentProfileDto profile = StudentProfileDto.builder().conversationId("c1").build();
         when(studentProfileService.getOrCreate(anyString())).thenReturn(profile);
         when(studentProfileService.applyExtracted(anyString(), anyMap())).thenReturn(profile);
-        when(validationEngine.validateAll(any(), anyList(), anyString(), anyBoolean()))
+        when(validationEngine.validateAll(any(), anyList(), anyString()))
                 .thenReturn(ValidationResult.ready(ValidationMode.SPECIFIC_SCHEME, null, List.of()));
         when(retrievalQueryReformulator.reformulate(anyString(), anyList(), any(), any()))
                 .thenReturn(ReformulatedQuery.unscoped("combined"));
@@ -145,7 +144,7 @@ class ChatOrchestratorScholarshipResponseTest {
         StudentProfileDto profile = StudentProfileDto.builder().conversationId("c1").build();
         when(studentProfileService.getOrCreate(anyString())).thenReturn(profile);
         when(studentProfileService.applyExtracted(anyString(), anyMap())).thenReturn(profile);
-        when(validationEngine.validateAll(any(), anyList(), anyString(), anyBoolean()))
+        when(validationEngine.validateAll(any(), anyList(), anyString()))
                 .thenReturn(ValidationResult.ready(
                         ValidationMode.SPECIFIC_SCHEME,
                         SchemeType.TOP_CLASS_SC,

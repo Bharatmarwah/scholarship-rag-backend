@@ -93,29 +93,13 @@ public class ValidationEngine {
             StudentProfileDto profile,
             List<String> rawTargetSchemes,
             String conversationId) {
-        return validateForSchemes(profile, rawTargetSchemes, conversationId, false);
-    }
-
-    /**
-     * As {@link #validateAll}, but when the student's own turn is an
-     * informational question ("what is a social category?") the missing-field
-     * questions are suppressed: the result is always READY so the question is
-     * answered from the knowledge base. Pending validation is left untouched, so
-     * profile collection resumes on the student's next real answer.
-     */
-    public ValidationResult validateAll(
-            StudentProfileDto profile,
-            List<String> rawTargetSchemes,
-            String conversationId,
-            boolean asQuestion) {
-        return validateForSchemes(profile, rawTargetSchemes, conversationId, asQuestion);
+        return validateForSchemes(profile, rawTargetSchemes, conversationId);
     }
 
     private ValidationResult validateForSchemes(
             StudentProfileDto profile,
             List<String> rawTargetSchemes,
-            String conversationId,
-            boolean asQuestion) {
+            String conversationId) {
 
         List<SchemeType> namedSchemes =
                 resolveNamedSchemes(rawTargetSchemes);
@@ -152,9 +136,9 @@ public class ValidationEngine {
         }
 
         return switch (mode) {
-            case SPECIFIC_SCHEME -> validateSpecific(profile, targetScheme, conversationId, asQuestion);
-            case MULTI_SCHEME -> validateMultiScheme(profile, activeSchemes, conversationId, asQuestion);
-            case SCHOLARSHIP_DISCOVERY -> validateDiscovery(profile, conversationId, asQuestion);
+            case SPECIFIC_SCHEME -> validateSpecific(profile, targetScheme, conversationId);
+            case MULTI_SCHEME -> validateMultiScheme(profile, activeSchemes, conversationId);
+            case SCHOLARSHIP_DISCOVERY -> validateDiscovery(profile, conversationId);
         };
     }
 
@@ -196,11 +180,10 @@ public class ValidationEngine {
     private ValidationResult validateMultiScheme(
             StudentProfileDto profile,
             List<SchemeType> namedSchemes,
-            String conversationId,
-            boolean asQuestion) {
+            String conversationId) {
 
         if (namedSchemes == null || namedSchemes.isEmpty()) {
-            return validateDiscovery(profile, conversationId, asQuestion);
+            return validateDiscovery(profile, conversationId);
         }
 
         List<SchemeType> schemes = List.copyOf(namedSchemes);
@@ -210,9 +193,6 @@ public class ValidationEngine {
 
         if (missing.isEmpty()) {
             pendingState.clear(conversationId);
-            return ValidationResult.ready(ValidationMode.MULTI_SCHEME, null, schemes);
-        }
-        if (asQuestion) {
             return ValidationResult.ready(ValidationMode.MULTI_SCHEME, null, schemes);
         }
 
@@ -298,14 +278,13 @@ public class ValidationEngine {
     private ValidationResult validateSpecific(
             StudentProfileDto profile,
             SchemeType targetScheme,
-            String conversationId,
-            boolean asQuestion) {
+            String conversationId) {
 
         if (targetScheme == null) {
             // No single scheme is in progress, so there is no checklist to
             // complete. Falling through avoids asking questions of an unknown
             // scheme definition.
-            return validateDiscovery(profile, conversationId, asQuestion);
+            return validateDiscovery(profile, conversationId);
         }
 
         SchemeDefinition definition = schemeRegistry.definition(targetScheme);
@@ -315,12 +294,6 @@ public class ValidationEngine {
 
         if (missing.isEmpty()) {
             pendingState.clear(conversationId);
-            return ValidationResult.ready(
-                    ValidationMode.SPECIFIC_SCHEME,
-                    targetScheme,
-                    List.of(targetScheme));
-        }
-        if (asQuestion) {
             return ValidationResult.ready(
                     ValidationMode.SPECIFIC_SCHEME,
                     targetScheme,
@@ -340,8 +313,7 @@ public class ValidationEngine {
 
     private ValidationResult validateDiscovery(
             StudentProfileDto profile,
-            String conversationId,
-            boolean asQuestion) {
+            String conversationId) {
 
         List<SchemeType> allSchemes = schemeRegistry.allSchemes();
         Optional<StudentProfileField> next = schemeRegistry.discoveryOrder().stream()
@@ -351,12 +323,6 @@ public class ValidationEngine {
 
         if (next.isEmpty()) {
             pendingState.clear(conversationId);
-            return ValidationResult.ready(
-                    ValidationMode.SCHOLARSHIP_DISCOVERY,
-                    null,
-                    allSchemes);
-        }
-        if (asQuestion) {
             return ValidationResult.ready(
                     ValidationMode.SCHOLARSHIP_DISCOVERY,
                     null,

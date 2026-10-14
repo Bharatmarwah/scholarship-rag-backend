@@ -662,23 +662,4 @@ class ValidationEngineTest {
         assertFalse(ValidationEngine.isSchoolLevel("UG"));
         assertFalse(ValidationEngine.isSchoolLevel("college"));
     }
-
-    // An informational question must be answerable, not turned into a profile
-    // question: missing-field questions are suppressed and the result is READY.
-    @Test
-    void informationalQuestionSuppressesMissingFieldQuestions() {
-        StudentProfileDto profile = StudentProfileDto.builder().build();
-
-        ValidationResult asked = engine.validateAll(profile, List.of(), "c-q");
-        assertEquals(ValidationStatus.MISSING_INFORMATION, asked.getStatus());
-
-        ValidationResult answered = engine.validateAll(profile, List.of(), "c-q", true);
-        assertEquals(ValidationStatus.READY, answered.getStatus());
-        assertTrue(answered.getMissingFields().isEmpty());
-        assertNull(answered.getQuestion());
-
-        // Pending validation is preserved, so profile collection resumes.
-        ValidationResult resumed = engine.validateAll(profile, List.of(), "c-q", false);
-        assertEquals(ValidationStatus.MISSING_INFORMATION, resumed.getStatus());
-    }
 }

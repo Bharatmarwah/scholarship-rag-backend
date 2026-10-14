@@ -2,6 +2,7 @@ package com.bharat.scholarship_rag_backend.config;
 
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.googleai.GoogleAiEmbeddingModel;
+import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,6 +23,9 @@ public class LlmConfig {
 
     @Value("${gemini.api.key}")
     private String geminiApiKey;
+
+    @Value("${gemini.embedding.model.name}")
+    private String geminiEmbeddingModelName;
 
     @Value("${gemini.model.name}")
     private String geminiModelName;
@@ -51,9 +55,19 @@ public class LlmConfig {
     public EmbeddingModel embeddingModel() {
         return GoogleAiEmbeddingModel.builder()
                 .apiKey(geminiApiKey)
-                .modelName(geminiModelName)
+                .modelName(geminiEmbeddingModelName)
                 .taskType(GoogleAiEmbeddingModel.TaskType.RETRIEVAL_DOCUMENT)
                 .outputDimensionality(embeddingDimension)
+                .build();
+    }
+
+    @Bean
+    public GoogleAiGeminiChatModel geminiChatModel(){
+        return GoogleAiGeminiChatModel
+                .builder()
+                .apiKey(geminiApiKey)
+                .modelName(geminiModelName)
+                .temperature(0.0)
                 .build();
     }
 

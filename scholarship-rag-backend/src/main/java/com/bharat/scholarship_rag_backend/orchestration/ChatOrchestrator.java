@@ -5,7 +5,6 @@ import com.bharat.scholarship_rag_backend.composer.QueryComposerResult;
 import com.bharat.scholarship_rag_backend.dto.StudentProfileDto;
 import com.bharat.scholarship_rag_backend.dto.request.ChatMessage;
 import com.bharat.scholarship_rag_backend.dto.request.ChatRequest;
-import com.bharat.scholarship_rag_backend.dto.request.MessageRole;
 import com.bharat.scholarship_rag_backend.dto.response.ChatResponse;
 import com.bharat.scholarship_rag_backend.embedding.QueryEmbedding;
 import com.bharat.scholarship_rag_backend.eligibility.EligibilityAnswerFormatter;
@@ -15,7 +14,6 @@ import com.bharat.scholarship_rag_backend.enrichment.QueryEnricher;
 import com.bharat.scholarship_rag_backend.enrichment.QueryGate;
 import com.bharat.scholarship_rag_backend.intent.IntentClassification;
 import com.bharat.scholarship_rag_backend.intent.IntentResponse;
-import com.bharat.scholarship_rag_backend.intent.IntentType;
 import com.bharat.scholarship_rag_backend.memory.conversation.ConversationMemoryManager;
 import com.bharat.scholarship_rag_backend.memory.conversation.ConversationMemory;
 import com.bharat.scholarship_rag_backend.memory.semantic.SemanticMemoryManager;
@@ -125,32 +123,27 @@ public class ChatOrchestrator {
         // Clean user query
         String cleanedQuery = queryGate.clean(chatRequest.getQuery());
 
-        // Enrich query using recent conversation context when required
+        // Intent classification is the single decider between GENERAL_CHAT and
+        // SCHOLARSHIP. It runs on the student's own cleaned turn, before the
+        // turn is combined with the conversation, so a self-contained question
+        // keeps its literal intent. The recent conversation memory is still
+        // passed, but only so a short reply that answers the assistant's
+        // previous question is recognised as SCHOLARSHIP.
+        IntentResponse intentResponse =
+                intentClassification.classify(
+                        cleanedQuery,
+                        recentConversationMessages);
+
+        log.info("Intent type {}",intentResponse.getType());
+
+        // Enrich query using recent conversation context when required. This is
+        // done after classification so the combined text is only used for
+        // retrieval/composition, never to decide the intent.
         String enrichedQuery = queryGate.needsContext(cleanedQuery)
                 ? queryEnricher.enrich(cleanedQuery, recentConversationMessages)
                 : cleanedQuery;
 
         log.info("Processed query {}", enrichedQuery);
-
-        // Intent classification. History is passed so a reply that continues an
-        // ongoing scholarship/eligibility exchange (e.g. answering a profile
-        // question) is recognised as SCHOLARSHIP instead of falling to UNKNOWN.
-        IntentResponse intentResponse =
-                intentClassification.classify(
-                        enrichedQuery,
-                        recentConversationMessages);
-
-        // Deterministic fallback: after the assistant asked a question in the
-        // previous turn (for example a validation question), the next user
-        // message is very likely an answer to it. Route it through the
-        // scholarship flow so the composer can extract the profile values.
-        if (intentResponse.getType() == IntentType.UNKNOWN
-                && isAnswerToAssistantsQuestion(recentConversationMessages)) {
-            log.info("Routing UNKNOWN query to SCHOLARSHIP flow: previous assistant turn was a question");
-            intentResponse = IntentResponse.forType(IntentType.SCHOLARSHIP);
-        }
-
-        log.info("Intent type {}",intentResponse.getType());
 
         // Response will be created by the corresponding intent flow
         ChatResponse chatResponse = null;
@@ -204,18 +197,14 @@ public class ChatOrchestrator {
                 );
 
                 // Validate the profile against the target scheme (or discovery
-                // mode when no scheme was named). Ask for missing information;
-                // only when every required field is present do we proceed to
-                // retrieval/answer. When the student's own turn is an
-                // informational question ("what is a social category?") the
-                // questions are suppressed and the query is answered instead.
-                boolean asQuestion = isInformationalQuestion(cleanedQuery);
+                // mode when no scheme was named). Validation is never
+                // suppressed: only when every required field is present do we
+                // proceed to an answer.
                 ValidationResult validationResult =
                         validationEngine.validateAll(
                                 profile,
                                 composerResult.getTargetSchemes(),
-                                chatRequest.getConversationId(),
-                                asQuestion
+                                chatRequest.getConversationId()
                         );
 
                 log.info("Validation status {} mode {} target schemes {}",
@@ -236,15 +225,13 @@ public class ChatOrchestrator {
                             chatResponse
                     );
                 } else {
-                    // When a scheme (or discovery) produced a complete-enough
-                    // profile and the student is not just asking a knowledge
-                    // question, the deterministic eligibility engine decides:
-                    // match the collected profile against each scheme's target
-                    // criteria. Otherwise fall back to grounded retrieval.
+                    // Once validation passes, the deterministic eligibility
+                    // engine decides: match the collected profile against each
+                    // scheme's target criteria. Discovery has no explicit
+                    // scheme, so its target list is every scheme. If no scheme
+                    // is in scope at all, fall back to grounded retrieval.
                     List<SchemeType> targetSchemes = validationResult.getTargetSchemes();
-                    boolean useEligibility = !asQuestion
-                            && targetSchemes != null
-                            && !targetSchemes.isEmpty();
+                    boolean useEligibility = targetSchemes != null && !targetSchemes.isEmpty();
 
                     ChatResponse response;
                     if (useEligibility) {
@@ -412,49 +399,6 @@ public class ChatOrchestrator {
         }
 
         return answer.toString();
-    }
-
-    static boolean isAnswerToAssistantsQuestion(List<ChatMessage> recentConversationMessages) {
-        if (recentConversationMessages == null || recentConversationMessages.isEmpty()) {
-            return false;
-        }
-        ChatMessage last = recentConversationMessages.get(recentConversationMessages.size() - 1);
-        return last.getRole() == MessageRole.ASSISTANT
-                && last.getContent() != null
-                && last.getContent().trim().endsWith("?");
-    }
-
-    /** Tokens that mark the student's turn as a knowledge question, not an answer. */
-    private static final java.util.Set<String> QUESTION_TOKENS = java.util.Set.of(
-            "what", "why", "how", "which", "when", "who", "where", "whose",
-            "explain", "define", "definition", "meaning");
-
-    /**
-     * True when the student is asking for information rather than answering a
-     * question. Such a turn must be answered from the knowledge base, not turned
-     * into another profile question.
-     */
-    static boolean isInformationalQuestion(String cleanedQuery) {
-        if (cleanedQuery == null || cleanedQuery.isBlank()) {
-            return false;
-        }
-        String query = cleanedQuery.toLowerCase(java.util.Locale.ROOT).trim();
-        if (query.endsWith("?")) {
-            return true;
-        }
-        if (query.startsWith("tell me") || query.contains("tell me about")) {
-            return true;
-        }
-        String normalized = query.replaceAll("[^a-z0-9]+", " ").trim();
-        if (normalized.isEmpty()) {
-            return false;
-        }
-        for (String token : normalized.split(" +")) {
-            if (QUESTION_TOKENS.contains(token)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**

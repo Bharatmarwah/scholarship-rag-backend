@@ -39,13 +39,36 @@ class IntentClassificationTest {
 
         ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
         verify(chatModel).chat(captor.capture());
-        String prompt = captor.getValue();
+        String prompt = captor.getValue().replaceAll("\\s+", " ");
 
         assertTrue(prompt.contains(
                 "ASSISTANT: Could you please tell me which year of your course you are currently in?"));
         assertTrue(prompt.contains(
-                "answers that provide profile or eligibility details"));
+                "by providing profile or eligibility details"));
         assertEquals(IntentType.SCHOLARSHIP, response.getType());
+    }
+
+    @Test
+    void promptGivesPrecedenceToSelfContainedGeneralKnowledgeQuestions() {
+        when(chatModel.chat(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("{\"type\":\"GENERAL_CHAT\"}");
+
+        IntentClassification classifier = new IntentClassification(chatModel, objectMapper);
+        IntentResponse response = classifier.classify(
+                "what is social category",
+                List.of(new ChatMessage(
+                        MessageRole.ASSISTANT,
+                        "Could you please tell me your social category?",
+                        LocalDateTime.now())));
+
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(chatModel).chat(captor.capture());
+        String prompt = captor.getValue().replaceAll("\\s+", " ");
+
+        assertTrue(prompt.contains(
+                "does not ask about a scholarship scheme or its facts, output GENERAL_CHAT"));
+        assertTrue(prompt.contains("\"what is a social category?\""));
+        assertEquals(IntentType.GENERAL_CHAT, response.getType());
     }
 
     @Test
